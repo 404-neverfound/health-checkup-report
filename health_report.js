@@ -98,6 +98,7 @@ async function main() {
     assetIds: [],
     timeoutMs: options['timeout-ms'] ? Number(options['timeout-ms']) : undefined,
     pollIntervalMs: options['poll-interval-ms'] ? Number(options['poll-interval-ms']) : undefined,
+    mock: options.mock === true || options.mock === 'true',
     logger
   });
   if (Object.keys(tableExports).length) {
@@ -547,6 +548,7 @@ Options:
   --end <YYYY-MM-DD>             Optional report end date
   --cookie-path <path>           SOAR cookie file path (soar.sangfor.com.cn)
   --xdr-tables <names>           Optional MSSW export tables, default asset,incident
+  --mock                         使用本地文件模拟数据，跳过MSSW接口下载
   --download-dir <path>          Optional export directory override
   --output-json <path>           Optional report data JSON path, default output/report-data.json
   --json                         Print full JSON result to stdout
@@ -569,26 +571,26 @@ async function exportConfiguredXdrTables(options) {
 
   for (const table of tables) {
     if (table === 'asset') {
-      // logWith(options.logger, '开始处理表格: asset (MSSW 真实下载)');
-      // results.asset = await exportMsswAssetList({
-      //   msswCookiePath: options.msswCookiePath,
-      //   msswBaseUrl: options.msswBaseUrl,
-      //   downloadDir: options.downloadDir,
-      //   customerId: options.customerId,
-      //   assetIds: options.assetIds || [],
-      //   logger: options.logger
-      // });
-
-      // 改为固定读项目根目录的资产表
-      logWith(options.logger, '开始处理表格: asset (读取本地资产列表.xlsx)');
-      const localAssetPath = path.join(__dirname, '资产列表.xlsx');
-      const processedResult = await processRiskListTable('asset', localAssetPath);
-      results.asset = {
-        filePath: processedResult.filePath,
-        tmpFilePath: processedResult.filePath,
-        filename: '资产列表.xlsx'
-      };
-      logWith(options.logger, `资产表已处理: ${processedResult.filePath}`);
+      if (options.mock) {
+        logWith(options.logger, '开始处理表格: asset (读取本地资产列表.xlsx)');
+        const localAssetPath = path.join(__dirname, '资产列表.xlsx');
+        const processedResult = await processRiskListTable('asset', localAssetPath);
+        results.asset = {
+          filePath: processedResult.filePath,
+          tmpFilePath: processedResult.filePath,
+          filename: '资产列表.xlsx'
+        };
+      } else {
+        logWith(options.logger, '开始处理表格: asset (MSSW 真实下载)');
+        results.asset = await exportMsswAssetList({
+          msswCookiePath: options.msswCookiePath,
+          msswBaseUrl: options.msswBaseUrl,
+          downloadDir: options.downloadDir,
+          customerId: options.customerId,
+          assetIds: options.assetIds || [],
+          logger: options.logger
+        });
+      }
       continue;
     }
 
