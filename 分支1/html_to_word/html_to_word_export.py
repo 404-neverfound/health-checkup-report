@@ -32,7 +32,7 @@ import yaml
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from docx import Document
 from docx.enum.section import WD_ORIENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm, Pt, RGBColor, Emu
@@ -74,6 +74,7 @@ _DEFAULT_CONFIG = {
         ".sr-grade": "grade_badge",
         ".report-chart-note": "muted_note",
         ".sr-p--sub": "sub_paragraph",
+        ".sr-risk-harm-box": "risk_harm_box",
     },
     "docx": {"page_width_mm": 210, "page_height_mm": 297, "margin_mm": 20},
     "fonts": {
@@ -135,6 +136,21 @@ _GRADE_DEFAULT = ("EDEEF1", "6F7785")
 
 def _log(msg, level="INFO"):
     print(f"[{level}] {msg}")
+
+
+def _has_class(node, class_name):
+    """判断 BeautifulSoup 节点是否含指定 class。
+
+    Args:
+        node: bs4 Tag / NavigableString 等。非 Tag 一律返回 False。
+        class_name: 待匹配的 class 名（精确匹配，多个 class 时任一命中即 True）。
+    """
+    if not isinstance(node, Tag):
+        return False
+    classes = node.get("class") or []
+    if isinstance(classes, str):
+        classes = classes.split()
+    return class_name in classes
 
 
 class _Container:
@@ -211,9 +227,15 @@ class _Container:
             else:
                 run.add_picture(image, width=width, height=height)
             return p
+        # Document：python-docx 的 add_picture 返回 InlineShape，无法直接拿段落；
+        # 改为手动建段，让调用方能拿到段落对象设置 space_before / space_after。
+        p = self.doc.add_paragraph()
+        run = p.add_run()
         if isinstance(image, str):
-            return self.doc.add_picture(image, width=width, height=height)
-        return self.doc.add_picture(image, width=width, height=height)
+            run.add_picture(image, width=width, height=height)
+        else:
+            run.add_picture(image, width=width, height=height)
+        return p
 
 
 def _css_to_bs4_selector(selector):
@@ -528,9 +550,72 @@ class HtmlToWordExporter:
                 if not marked:
                     # 该 selector 下已无元素，结束循环
                     break
+
+                # .sr-chart-slot 仅含 .sr-chart-card / 布局网格时跳过整槽截图，
+                # 让内部卡片单独截图（Word 里多张分布图独立呈现）
+                if selector == ".sr-chart-slot":
+                    try:
+                        should_skip = page.evaluate(
+                            """(sid) => {
+                                const el = document.querySelector(`[data-snapshot-id="${sid}"]`);
+                                if (!el) return false;
+                                const children = Array.from(el.children).filter(c => c.nodeType === 1);
+                                if (children.length === 0) return false;
+                                // 允许直接子元素是 .sr-chart-card 或布局网格容器
+                                // （.sr-chart-grid-2 / .sr-chart-grid-3 等只承载布局）
+                                const layoutOnly = c =>
+                                    c.classList.contains('sr-chart-card') ||
+                                    /sr-chart-grid-\\d/.test(c.className || '');
+                                const allAllowed = children.every(layoutOnly);
+                                if (!allAllowed) return false;
+                                // 进一步校验：子元素里至少要有一张 .sr-chart-card
+                                // （布局网格内的卡片也算）
+                                const hasCard = children.some(c =>
+                                    c.classList.contains('sr-chart-card') ||
+                                    c.querySelector('.sr-chart-card'));
+                                if (!hasCard) return false;
+                                el.removeAttribute('data-snapshot-id');
+                                const parent = el.parentNode;
+                                while (el.firstChild) {
+                                    parent.insertBefore(el.firstChild, el);
+                                }
+                                parent.removeChild(el);
+                                return true;
+                            }""",
+                            snap_id,
+                        )
+                    except Exception as e:
+                        _log(f".sr-chart-slot 检查失败（忽略）: {e}", "WARNING")
+                        should_skip = False
+                    if should_skip:
+                        continue
                 # 用 data-snapshot-id 精确定位（不受 replaceWith 索引偏移影响）
                 el = page.locator(f'[data-snapshot-id="{snap_id}"]')
                 img_path = tmp_dir / f"comp-{snap_id}.png"
+
+                # .sr-chart-card 截图前：提取并移除标题（chart-title），让 Word 把标题独立放在图上
+                chart_title = None
+                if selector == ".sr-chart-card":
+                    try:
+                        chart_title = page.evaluate(
+                            """(sid) => {
+                                const el = document.querySelector(`[data-snapshot-id="${sid}"]`);
+                                if (!el) return null;
+                                const title = el.querySelector('.chart-title, .sr-chart-title');
+                                if (!title) return null;
+                                const text = (title.textContent || '').trim();
+                                title.parentNode.removeChild(title);
+                                return text;
+                            }""",
+                            snap_id,
+                        )
+                    except Exception as e:
+                        _log(f".sr-chart-card 标题提取失败（忽略）: {e}", "WARNING")
+                if chart_title:
+                    if not hasattr(self, "_snapshot_titles"):
+                        self._snapshot_titles = {}
+                    self._snapshot_titles[snap_id] = chart_title
+
                 try:
                     el.screenshot(path=str(img_path))
                 except Exception as e:
@@ -681,6 +766,16 @@ class HtmlToWordExporter:
         try:
             self._update_fields_via_word(out)
         except Exception as e:
+            _log(f"COM 刷新域失败（非致命）: {e}", "WARNING")
+        # 锁定封面页（在 COM 刷新域之后，避免 Word 重新保存时清除 permStart/permEnd）：
+        # 重新加载磁盘 docx（COM 可能已经重新保存），写入 documentProtection + permStart/permEnd
+        try:
+            from docx import Document as _Document
+            doc2 = _Document(str(out))
+            # 封面页保护已取消（用户要求封面可编辑），不再调用 _lock_cover_page
+            doc2.save(str(out))
+            _log("封面页保护已取消（封面可编辑）")
+        except Exception as e:
             _log(f"更新域流程异常（docx 已保存可用）: {e}", "WARNING")
         return out
 
@@ -717,6 +812,66 @@ class HtmlToWordExporter:
             return
         # 最终回退：append 到末尾
         settings.append(upd)
+
+    def _lock_cover_page(self, doc):
+        """锁定封面页（不让编辑）：通过 documentProtection + range permission 实现。
+
+        实现策略：
+        1. 在 settings.xml 写入 <w:documentProtection w:edit="readOnly"
+           w:enforcement="1"/>，让整个文档默认只读
+        2. 找到封面 section 的 section break（在封面最后一段的 pPr.sectPr 里），
+           在它之后插入 <w:permStart w:id="1" w:edGrp="everyone"/>，
+           让正文区域可编辑
+        3. 在 body 末尾（最后一个 sectPr 之前）插入 <w:permEnd w:id="1"/>
+
+        用户可在 Word"审阅→限制编辑→停止保护"解除（无需密码）。
+        """
+        try:
+            # 1) settings.xml 加 documentProtection readOnly
+            settings = doc.settings.element
+            existing = settings.find(qn("w:documentProtection"))
+            if existing is not None:
+                settings.remove(existing)
+            dp = OxmlElement("w:documentProtection")
+            dp.set(qn("w:edit"), "readOnly")
+            dp.set(qn("w:enforcement"), "1")
+            upd = settings.find(qn("w:updateFields"))
+            if upd is not None:
+                upd.addprevious(dp)
+            else:
+                rsids = settings.find(qn("w:rsids"))
+                if rsids is not None:
+                    rsids.addprevious(dp)
+                else:
+                    settings.append(dp)
+
+            # 2) 找封面 section break（中间 section 的 sectPr 在段落 pPr 里）
+            body = doc.element.body
+            # 列出所有 sectPr（包括 body 直接的 + 段落 pPr 里的）
+            all_sect_prs = body.findall('.//' + qn('w:sectPr'))
+            if len(all_sect_prs) >= 2:
+                # 第一个 sectPr 是封面 section break（在封面最后一段 pPr 里）
+                cover_sect_pr = all_sect_prs[0]
+                # 在封面 sectPr 所在段落之后插入 permStart
+                # 找到包含 cover_sect_pr 的段落
+                parent_p = cover_sect_pr.getparent()  # pPr
+                parent_p = parent_p.getparent() if parent_p is not None else None  # p
+                if parent_p is not None:
+                    perm_start = OxmlElement("w:permStart")
+                    perm_start.set(qn("w:id"), "1")
+                    perm_start.set(qn("w:edGrp"), "everyone")
+                    parent_p.addnext(perm_start)
+
+                    # 在 body 末尾（最后 sectPr 之前）插入 permEnd
+                    last_sect_pr = all_sect_prs[-1]
+                    perm_end = OxmlElement("w:permEnd")
+                    perm_end.set(qn("w:id"), "1")
+                    last_sect_pr.addprevious(perm_end)
+            elif len(all_sect_prs) == 1:
+                # 只有一个 section（无封面分节），跳过锁定
+                _log("仅 1 个 section，跳过封面锁定", "WARNING")
+        except Exception as e:
+            _log(f"封面页锁定失败: {e}", "WARNING")
 
     def _update_fields_via_word(self, out_path):
         """在 doc.save() 之后调用 Word COM 离线刷新所有域（TOC / PAGE / REF 等）。
@@ -900,71 +1055,90 @@ class HtmlToWordExporter:
         pb_run._element.append(br)
 
     def _insert_doc_info_page(self, doc):
-        """插入文档信息页：把缓存的 .sr-doc-info-page 节点映射到正文 section，
-        末尾插分页符让其单独成页，排在 TOC 前。
+        """文档信息页已合并到封面页（_append_doc_info_into_cover），此处保留为
+        no-op 以避免在 TOC 前再生成一次重复内容。"""
+        return
 
-        节点结构：
-          <section class="sr-doc-info-page">
-            <h2>版权申明</h2>
-            <p>本文档...</p>
-            <h3>文档信息</h3>
-            <table class="sr-tbl sr-copyright-meta">...</table>
-          </section>
+    def _append_doc_info_into_cover(self, doc, with_indent=False, top_padding_mm=0):
+        """追加版权申明 + 文档信息。
+
+        若 with_indent=True（封面 section 边距为 0 时的第 2 页场景），
+        为所有段落加 10mm 左右缩进，模拟 A4 标准内边距视觉效果。
+        若 top_padding_mm>0，给第一个段落（h2）额外加 space_before，
+        让内容离页眉保留距离。
         """
         node = getattr(self, "_doc_info_node", None)
         if node is None:
-            _log("未找到 .sr-doc-info-page 节点，跳过文档信息页插入", "WARNING")
+            _log("未找到 .sr-doc-info-page 节点，跳过封面文档信息追加", "WARNING")
             return
         fonts_cfg = self.config.get("fonts", {}) or {}
         container = _Container(doc, fonts=fonts_cfg)
-        # 按顺序映射直接子节点（h2 / p / h3 / table）
-        # h2/h3 用普通段落写入并手动设格式，避免被 TOC 自动收录
+
+        def _apply_indent(p):
+            if with_indent:
+                pf = p.paragraph_format
+                pf.left_indent = Mm(10)
+                pf.right_indent = Mm(10)
+
+        first_block = True
         for child in node.children:
             if child.name in ('h2', 'h3'):
                 text = child.get_text(" ", strip=True)
-                if text:
-                    cfg_key = 'heading_2' if child.name == 'h2' else 'heading_3'
-                    cfg = fonts_cfg.get(cfg_key, {})
-                    p = container.add_paragraph(text)
-                    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                    pf = p.paragraph_format
-                    pf.space_before = Pt(cfg.get('space_before_pt', 0))
-                    pf.space_after = Pt(cfg.get('space_after_pt', 0))
-                    for run in p.runs:
-                        run.bold = cfg.get('bold', True)
-                        # 局部覆盖：版权申明/文档信息标题固定为四号（14pt）
-                        if (child.name == 'h2' and '版权申明' in text) or                            (child.name == 'h3' and '文档信息' in text):
-                            run.font.size = Pt(14)
-                        else:
-                            run.font.size = Pt(cfg.get('size_pt', 16))
-                        color_hex = cfg.get('color_hex', '')
-                        if color_hex and len(color_hex) == 6:
-                            run.font.color.rgb = RGBColor(
-                                int(color_hex[0:2], 16),
-                                int(color_hex[2:4], 16),
-                                int(color_hex[4:6], 16)
-                            )
-            else:
+                if not text:
+                    continue
+                is_h2 = child.name == 'h2'
+                p = container.add_paragraph("")
+                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                pf = p.paragraph_format
+                # 用户调整后的间距：h2 3.5/2.1mm, h3 2.8/1.4mm
+                base_before = 3.5 if is_h2 else 2.8
+                if first_block and top_padding_mm > 0:
+                    # 第一个 h2 加额外 top_padding
+                    base_before += top_padding_mm
+                pf.space_before = Mm(base_before)
+                pf.space_after = Mm(2.1 if is_h2 else 1.4)
+                _apply_indent(p)
+                run = p.add_run(text)
+                run.bold = True
+                run.font.size = Pt(14)
+                run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+                first_block = False
+            elif child.name == 'p':
+                text = child.get_text(" ", strip=True)
+                if not text:
+                    continue
+                p = container.add_paragraph("")
+                _apply_indent(p)
+                run = p.add_run(text)
+                run.font.name = '微软雅黑'
+                run.font.size = Pt(12)
+                rpr = run._element.get_or_add_rPr()
+                rFonts = rpr.find(qn('w:rFonts'))
+                if rFonts is None:
+                    rFonts = OxmlElement('w:rFonts')
+                    rpr.insert(0, rFonts)
+                rFonts.set(qn('w:eastAsia'), '微软雅黑')
+                first_block = False
+            elif child.name == 'table':
                 self._map_node(child, container)
-                # 版权申明正文：微软雅黑 小四（12pt）
-                if child.name == 'p':
-                    last_p = container.doc.paragraphs[-1] if not container.is_cell else None
-                    if last_p:
-                        for run in last_p.runs:
-                            run.font.name = '微软雅黑'
-                            run.font.size = Pt(12)
-                            rpr = run._element.get_or_add_rPr()
-                            rFonts = rpr.find(qn('w:rFonts'))
-                            if rFonts is None:
-                                rFonts = OxmlElement('w:rFonts')
-                                rpr.insert(0, rFonts)
-                            rFonts.set(qn('w:eastAsia'), '微软雅黑')
-        # 末尾插分页符，让 TOC 从新页开始
-        page_break_p = doc.add_paragraph()
-        pb_run = page_break_p.add_run()
-        br = OxmlElement("w:br")
-        br.set(qn("w:type"), "page")
-        pb_run._element.append(br)
+                last_tbl = doc.tables[-1] if doc.tables else None
+                if last_tbl is not None:
+                    tbl_pr = last_tbl._element.find(qn('w:tblPr'))
+                    if tbl_pr is not None:
+                        existing_jc = tbl_pr.find(qn('w:jc'))
+                        if existing_jc is not None:
+                            tbl_pr.remove(existing_jc)
+                        jc = OxmlElement('w:jc')
+                        jc.set(qn('w:val'), 'center')
+                        tbl_pr.append(jc)
+                        if with_indent:
+                            tbl_ind = tbl_pr.find(qn('w:tblInd'))
+                            if tbl_ind is None:
+                                tbl_ind = OxmlElement('w:tblInd')
+                                tbl_pr.append(tbl_ind)
+                            tbl_ind.set(qn('w:w'), str(int(Mm(10).twips)))
+                            tbl_ind.set(qn('w:type'), 'dxa')
+                first_block = False
 
     # ── 首页（封面）──────────────────────────────────
 
@@ -1003,64 +1177,214 @@ class HtmlToWordExporter:
         """封面背景图固定路径：html_to_word/assets/a4-portrait-bg.png"""
         return Path(__file__).resolve().parent / "assets" / "a4-portrait-bg.png"
 
+    def _title_page_bg_path(self):
+        """标题页背景图（含背景+logo+客户名/日期渐变色块+底部曲线）：
+        html_to_word/title-page-bg.png，1200x544 px 横向图。"""
+        return Path(__file__).resolve().parent / "title-page-bg.png"
+
     def _insert_cover_page(self, doc, cover_info):
-        """把第一个 section 改成 A4 竖版、零边距，铺满背景图，标题/客户名/时间
-        悬浮在背景图之上。
+        """封面页：按 HTML A4 竖版封面布局。
 
-        实现要点：背景图作为"衬于文字下方"的浮动图片（wp:anchor + behindDoc=1）
-        绝对定位到页面 (0,0)、extent=整页大小，与页面边距无关。随后插入的标题/
-        客户名/报告时间段落是普通段落，它们流式排列但因为图片浮于文字下方，
-        视觉上叠加在背景图之上。
+        布局（A4 竖版 210×297mm，对应 Figma 1200×1700）：
+          第 1 页（封面）：
+            0~297mm    : title-page-bg.png 整页背景（1200×1700 RGB）+ logo（上方居中）
+            ~239mm     : 报告标题（bottom: 330/1700 ≈ 57.5mm 处，font-size 11.18mm）
+            ~261mm     : 客户名称（bottom: 206/1700 ≈ 36mm 处，font-size 3.85mm）
+            ~265mm     : 报告日期（紧接客户名，font-size 3.5mm）
+          第 2 页（版权/文档信息）：
+            版权申明 h2 + 段落 + 文档信息 h3 + 表格
 
-        doc.sections[0] 默认存在；将其重配为 A4 竖版（210×297mm，零边距）作为封面 section。
+        实现：title-page-bg.png 作为衬于文字下方的浮动图片，覆盖整页（210×297mm）；
+        标题/客户名/日期段落通过精确 space_before 推到 Figma 对应位置；
+        末尾插入分页符，让版权/文档信息落在新页。
         """
-        bg_path = self._cover_bg_path()
-        if not bg_path.exists():
-            _log(f"封面背景图不存在: {bg_path}", "WARNING")
+        title_bg_path = self._title_page_bg_path()
+        if not title_bg_path.exists():
+            _log(f"封面 title-page-bg.png 不存在: {title_bg_path}", "WARNING")
         section = doc.sections[0]
         section.orientation = WD_ORIENT.PORTRAIT
         section.page_width = Mm(210)
         section.page_height = Mm(297)
+        # 上下左右 0 边距，让背景图覆盖整页；后续段落通过 space_before 精确定位
         section.left_margin = Mm(0)
         section.right_margin = Mm(0)
         section.top_margin = Mm(0)
         section.bottom_margin = Mm(0)
 
-        # 插入背景图（浮动、衬于文字下方、占满整页）。即使后续段落存在，背景图
-        # 也位于 z-order 最底层，文字悬浮其上。
-        if bg_path.exists():
+        # 1) 插入 title-page-bg.png 浮动图片（衬于文字下方，定位到页面 (0,0)，覆盖整页 210×297mm）
+        if title_bg_path.exists():
             try:
-                self._add_floating_background_picture(doc, str(bg_path),
-                                                    page_w_mm=210, page_h_mm=297)
+                self._add_floating_title_bg(doc, str(title_bg_path),
+                                            page_w_mm=210, page_h_mm=297)
             except Exception as e:
-                _log(f"封面背景图插入失败: {e}", "WARNING")
+                _log(f"title-page-bg.png 插入失败: {e}", "WARNING")
+            # 给图片占位段加 line=48pt 行距，撑高该段约 17mm，让后续段落往下推
+            last_p = doc.paragraphs[-1]
+            last_p.paragraph_format.line_spacing = Pt(48)
+            pPr = last_p._element.get_or_add_pPr()
+            spacing = pPr.find(qn('w:spacing'))
+            if spacing is not None:
+                spacing.set(qn('w:lineRule'), 'auto')
 
-        # 顶部留白把标题/客户名/时间整体推到页面底部
-        self._add_cover_spacer(doc, mm_before=200)
+        # 2) 报告标题：26pt 加粗 黑色 居中
+        #    HTML A4 竖版 Figma 中 bottom:330/1700 ≈ 57.5mm（即距顶 239.5mm）；
+        #    但 title-page-bg.png 在 y=1280 (~223mm) 以下为纯白区域，
+        #    用户反馈文字离页脚太近，调整到非白区域中下部：~180mm 处。
         title = cover_info.get("title", "").strip()
         if title:
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.space_before = Mm(155)
+            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.line_spacing = 1.0
             run = p.add_run(title)
             run.bold = True
-            run.font.size = Pt(28)
-            run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
-        # 客户名 / 报告时间，悬浮在背景图上方（黑色字），位于标题下方
-        self._add_cover_spacer(doc, mm_before=10)
+            run.font.size = Pt(26)
+            run.font.color.rgb = RGBColor(0x1E, 0x23, 0x2B)
+
+        # 3) 客户名称：14pt 加粗 #2F3540 居中
+        #    跟随标题，目标位置 ~198mm
         client = cover_info.get("client_name", "").strip()
         if client:
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.add_run(f"{client}")
+            p.paragraph_format.space_before = Mm(7)
+            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.line_spacing = 1.0
+            run = p.add_run(client)
             run.font.size = Pt(14)
-            run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+            run.font.bold = True
+            run.font.color.rgb = RGBColor(0x2F, 0x35, 0x40)
+
+        # 4) 报告日期：13pt #2F3540 居中（紧接客户名）
         period = cover_info.get("period", "").strip()
         if period:
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.add_run(f"{period}")
-            run.font.size = Pt(14)
-            run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+            p.paragraph_format.space_before = Mm(3)
+            p.paragraph_format.space_after = Pt(0)
+            p.paragraph_format.line_spacing = 1.0
+            run = p.add_run(period)
+            run.font.size = Pt(13)
+            run.font.color.rgb = RGBColor(0x2F, 0x35, 0x40)
+
+        # 5) 插入分页符：让版权申明 + 文档信息落到第 2 页
+        page_break_p = doc.add_paragraph()
+        page_break_p.add_run().add_break(WD_BREAK.PAGE)
+
+        # 6) 第 2 页顶部加 25mm 空 spacer 段，把版权申明从页眉处推开
+        #    （直接用 space_before 容易被分页符后的段间距折叠，空段更可靠）
+        top_spacer = doc.add_paragraph()
+        top_spacer.paragraph_format.space_before = Pt(0)
+        top_spacer.paragraph_format.space_after = Pt(0)
+        top_spacer.paragraph_format.line_spacing = Pt(50)  # 50pt ≈ 17.6mm
+        pPr_sp = top_spacer._element.get_or_add_pPr()
+        spacing_sp = pPr_sp.find(qn('w:spacing'))
+        if spacing_sp is not None:
+            spacing_sp.set(qn('w:lineRule'), 'exact')
+
+        # 7) 版权申明 + 文档信息（在第 2 页，距离顶部约 18mm）
+        #    第 2 页仍在封面 section（0 边距），左右通过 with_indent 加 10mm 缩进
+        self._append_doc_info_into_cover(doc, with_indent=True)
+
+    def _add_floating_title_bg(self, doc, image_path, page_w_mm, page_h_mm):
+        """插入 title-page-bg.png 作为浮动图片：behindDoc=1（衬于文字下方），
+        绝对定位到页面 (0,0)，宽度撑满 page_w_mm（210mm），高度按图片自身
+        像素比例缩放（1200x1700 → 210mm x 297mm，正好覆盖整页）。
+
+        关键：直接强制 width=210mm，按像素比例计算 height，**不**用 96 DPI
+        换算（避免图片实际无 DPI 信息时被算成 317mm 然后错误缩放成 21mm）。
+        """
+        from PIL import Image as _PILImage
+        with _PILImage.open(image_path) as im:
+            px_w, px_h = im.size
+        # 按像素比例计算高度
+        final_w_mm = page_w_mm
+        final_h_mm = page_w_mm * px_h / px_w  # 210 * 1700/1200 ≈ 297.5mm（整页）
+        # 如果计算出的高度超过 page_h_mm，截到 page_h_mm
+        if final_h_mm > page_h_mm:
+            final_h_mm = page_h_mm
+        final_w_emu = int(Mm(final_w_mm).emu)
+        final_h_emu = int(Mm(final_h_mm).emu)
+
+        # 1) 用 add_picture 插入内嵌图片，再转为 anchor
+        pic_para = doc.add_paragraph()
+        pf = pic_para.paragraph_format
+        pf.space_before = Pt(0)
+        pf.space_after = Pt(0)
+        pf.line_spacing = 1.0
+        run = pic_para.add_run()
+        run.add_picture(image_path, width=Mm(final_w_mm), height=Mm(final_h_mm))
+
+        # 2) 找 <wp:inline>，转 <wp:anchor>
+        r = run._element
+        drawing = r.find(qn("w:drawing"))
+        if drawing is None:
+            _log("未找到 w:drawing，title-page-bg 插入回退", "WARNING")
+            return
+        inline = drawing.find(qn("wp:inline"))
+        if inline is None:
+            _log("未找到 wp:inline，title-page-bg 插入回退", "WARNING")
+            return
+
+        anchor = OxmlElement("wp:anchor")
+        anchor.set("distT", "0")
+        anchor.set("distB", "0")
+        anchor.set("distL", "0")
+        anchor.set("distR", "0")
+        anchor.set("simplePos", "0")
+        anchor.set("relativeHeight", "0")
+        anchor.set("behindDoc", "1")
+        anchor.set("locked", "0")
+        anchor.set("layoutInCell", "1")
+        anchor.set("allowOverlap", "1")
+
+        simple_pos = OxmlElement("wp:simplePos")
+        simple_pos.set("x", "0")
+        simple_pos.set("y", "0")
+        anchor.append(simple_pos)
+
+        pos_h = OxmlElement("wp:positionH")
+        pos_h.set("relativeFrom", "page")
+        pos_offset = OxmlElement("wp:posOffset")
+        pos_offset.text = "0"
+        pos_h.append(pos_offset)
+        anchor.append(pos_h)
+
+        pos_v = OxmlElement("wp:positionV")
+        pos_v.set("relativeFrom", "page")
+        pos_offset_v = OxmlElement("wp:posOffset")
+        pos_offset_v.text = "0"
+        pos_v.append(pos_offset_v)
+        anchor.append(pos_v)
+
+        extent = OxmlElement("wp:extent")
+        extent.set("cx", str(final_w_emu))
+        extent.set("cy", str(final_h_emu))
+        anchor.append(extent)
+
+        effect_extent = OxmlElement("wp:effectExtent")
+        for side in ('l', 't', 'r', 'b'):
+            effect_extent.set(side, "0")
+        anchor.append(effect_extent)
+
+        wrap_none = OxmlElement("wp:wrapNone")
+        anchor.append(wrap_none)
+
+        doc_pr = OxmlElement("wp:docPr")
+        doc_pr.set("id", "0")
+        doc_pr.set("name", "封面标题图")
+        anchor.append(doc_pr)
+
+        cnv = OxmlElement("wp:cNvGraphicFramePr")
+        anchor.append(cnv)
+
+        graphic = inline.find(qn("a:graphic"))
+        if graphic is not None:
+            anchor.append(graphic)
+
+        drawing.remove(inline)
+        drawing.append(anchor)
 
     def _add_floating_background_picture(self, doc, image_path, page_w_mm, page_h_mm):
         """插入一张浮动图片：behindDoc=1（衬于文字下方），绝对定位到页面
@@ -1188,6 +1512,86 @@ class HtmlToWordExporter:
         pf.space_before = _Mm(mm_before)
         return p
 
+    def _add_white_card_panel(self, doc, width_mm=190, padding_mm=3,
+                              border_hex="D3D7DE", indent_left_mm=0,
+                              fill_hex="FFFFFF", align="center"):
+        """创建一个 1×1 卡片容器表格，用于封面里的"卡片式"信息块。
+
+        - fill_hex 底色（默认白 FFFFFF；可用 F5F7FA 等浅色模拟半透明叠加效果）
+        - 浅灰边框（border_hex，1pt）+ 固定宽度
+        - align: 表格水平对齐方式（center / left / right），默认居中
+          居中时 tblInd=0 + tblPrJc=center，避免硬左缩导致整体偏右
+        - 上下左右内边距 padding_mm
+        - fixed 布局，nil 默认样式
+
+        返回单元格对象（_Cell），调用方可往里 add_paragraph / add_table。
+        Word 表格本身不支持圆角；这里用浅灰边框 + 白底 + 内边距模拟卡片视觉。
+        """
+        tbl = doc.add_table(rows=1, cols=1)
+        tbl_pr = tbl._element.find(qn('w:tblPr'))
+        if tbl_pr is None:
+            tbl_pr = OxmlElement('w:tblPr')
+            tbl._element.insert(0, tbl_pr)
+        # 清掉 python-docx 默认 tblStyle / 边框
+        for tag in ('w:tblStyle', 'w:tblBorders', 'w:tblW', 'w:tblInd',
+                    'w:tblCellMar', 'w:tblLayout', 'w:tblPrJc'):
+            el = tbl_pr.find(qn(tag))
+            if el is not None:
+                tbl_pr.remove(el)
+        # tblW 固定宽度
+        tbl_w = OxmlElement('w:tblW')
+        tbl_w.set(qn('w:type'), 'dxa')
+        tbl_w.set(qn('w:w'), str(int(Mm(width_mm).twips)))
+        tbl_pr.append(tbl_w)
+        # 对齐方式：center 用 tblPrJc；left 用 tblInd 左缩进
+        if align == "center":
+            tbl_jc = OxmlElement('w:jc')
+            tbl_jc.set(qn('w:val'), 'center')
+            tbl_pr.append(tbl_jc)
+            # 居中时 tblInd=0
+            tbl_ind = OxmlElement('w:tblInd')
+            tbl_ind.set(qn('w:type'), 'dxa')
+            tbl_ind.set(qn('w:w'), '0')
+            tbl_pr.append(tbl_ind)
+        else:
+            tbl_ind = OxmlElement('w:tblInd')
+            tbl_ind.set(qn('w:type'), 'dxa')
+            tbl_ind.set(qn('w:w'), str(int(Mm(indent_left_mm).twips)))
+            tbl_pr.append(tbl_ind)
+        # tblLayout fixed
+        tbl_layout = OxmlElement('w:tblLayout')
+        tbl_layout.set(qn('w:type'), 'fixed')
+        tbl_pr.append(tbl_layout)
+        # 边框：单线，1pt = 8 twips, 颜色 border_hex
+        tbl_borders = OxmlElement('w:tblBorders')
+        for side in ('top', 'left', 'bottom', 'right'):
+            b = OxmlElement(f'w:{side}')
+            b.set(qn('w:val'), 'single')
+            b.set(qn('w:sz'), '8')
+            b.set(qn('w:space'), '0')
+            b.set(qn('w:color'), border_hex)
+            tbl_borders.append(b)
+        for side in ('insideH', 'insideV'):
+            b = OxmlElement(f'w:{side}')
+            b.set(qn('w:val'), 'nil')
+            tbl_borders.append(b)
+        tbl_pr.append(tbl_borders)
+        # 内边距
+        pad_twips = int(Mm(padding_mm).twips)
+        tbl_cell_mar = OxmlElement('w:tblCellMar')
+        for side in ('top', 'left', 'bottom', 'right'):
+            m = OxmlElement(f'w:{side}')
+            m.set(qn('w:w'), str(pad_twips))
+            m.set(qn('w:type'), 'dxa')
+            tbl_cell_mar.append(m)
+        tbl_pr.append(tbl_cell_mar)
+        # 底色
+        cell = tbl.rows[0].cells[0]
+        self._set_cell_shading(cell, fill_hex)
+        # 单元格宽度 = width - 2 * padding
+        cell.width = Mm(max(width_mm - 2 * padding_mm, 10))
+        return cell
+
     def _switch_to_body_section(self, doc):
         """在封面后新增 next-page section，作为正文 section（A4 竖版，与封面统一）。
 
@@ -1208,7 +1612,61 @@ class HtmlToWordExporter:
         new_section.right_margin = m
         new_section.top_margin = m
         new_section.bottom_margin = m
+        # 给正文 section 加居中页码页脚（封面 section 不链接，保持无页码）
+        self._add_page_number_footer(new_section)
         return new_section
+
+    def _add_page_number_footer(self, section):
+        """给指定 section 的 footer 加居中页码（PAGE 域），封面 section 不被调用。
+
+        实现：section.footer.is_linked_to_previous = False 断开继承，
+        在 footer 段落里插入 PAGE 域，居中对齐。
+        同时设置 pgNumType start=1，让正文 section 从 1 开始计数（封面不计入正文页码）。
+        """
+        try:
+            section.footer.is_linked_to_previous = False
+            # 清掉 footer 里已有的内容，重新写一个居中 PAGE 段
+            footer = section.footer
+            # 清空已有段落
+            for p in list(footer.paragraphs):
+                p._element.getparent().remove(p._element)
+            p = footer.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            # PAGE 域：fldChar begin → instrText 'PAGE' → fldChar separate → 占位 → fldChar end
+            run_begin = p.add_run()
+            fld_begin = OxmlElement("w:fldChar")
+            fld_begin.set(qn("w:fldCharType"), "begin")
+            run_begin._element.append(fld_begin)
+
+            run_instr = p.add_run()
+            instr = OxmlElement("w:instrText")
+            instr.set(qn("xml:space"), "preserve")
+            instr.text = " PAGE \\* MERGEFORMAT "
+            run_instr._element.append(instr)
+
+            run_sep = p.add_run()
+            fld_sep = OxmlElement("w:fldChar")
+            fld_sep.set(qn("w:fldCharType"), "separate")
+            run_sep._element.append(fld_sep)
+
+            run_placeholder = p.add_run("1")
+            run_placeholder.font.size = Pt(10.5)
+
+            run_end = p.add_run()
+            fld_end = OxmlElement("w:fldChar")
+            fld_end.set(qn("w:fldCharType"), "end")
+            run_end._element.append(fld_end)
+
+            # 让正文 section 页码从 1 开始（封面 section 不带页码，从节起始重算）
+            sect_pr = section._sectPr
+            existing_pgnum = sect_pr.find(qn("w:pgNumType"))
+            if existing_pgnum is not None:
+                sect_pr.remove(existing_pgnum)
+            pg_num = OxmlElement("w:pgNumType")
+            pg_num.set(qn("w:start"), "1")
+            sect_pr.append(pg_num)
+        except Exception as e:
+            _log(f"添加页码页脚失败: {e}", "WARNING")
 
     def _configure_page(self, doc):
         """设置 A4 竖版页面与边距。"""
@@ -1416,18 +1874,38 @@ class HtmlToWordExporter:
     def _handle_image(self, node, container): self._map_image(node, container)
 
     def _handle_risk_card_table(self, node, container):
-        """风险卡：用单行单列表格 + 内部段落近似还原。"""
+        """风险卡：用单行单列表格 + 内部段落近似还原。
+
+        用户 mark 调整：
+          - head 前不要额外空段（reuse_first_para）
+          - head 标题字号 > 11pt（13pt）
+          - body 里 p 正文首行缩进 2em（≈ 7.4mm）
+          - 步骤标题"1 网络防护"整体加缩进 5mm
+          - 步骤下子列表整体加缩进 10mm
+        """
         card_table = container.add_table(rows=1, cols=1)
         cell = card_table.cell(0, 0)
         cell_container = _Container(container.doc, cell=cell, fonts=container.fonts)
+        # 标记当前在风险卡内（让 _map_paragraph / _map_risk_step 加缩进）
+        self._in_risk_card = True
+        # 用 cell 默认的第一个段落作为 head 起点，避免出现额外空段
+        first_para_used = False
         for child in node.children:
-            if isinstance(child, Tag) and child.name in ("h6", "h5", "h4"):
-                head_text = child.get_text(strip=True)
-                p = cell_container.add_paragraph()
-                run = p.add_run(head_text)
-                run.bold = True
-            elif isinstance(child, Tag):
-                self._map_node(child, cell_container)
+            if isinstance(child, Tag):
+                child_classes = child.get("class") or []
+                is_head = (
+                    child.name in ("h6", "h5", "h4")
+                    or "sr-risk-card__head" in child_classes
+                )
+                if is_head:
+                    # head：用 _handle_risk_card_head 处理，避免额外空段
+                    self._handle_risk_card_head(child, cell_container,
+                                                reuse_first_para=not first_para_used)
+                    first_para_used = True
+                else:
+                    self._map_node(child, cell_container)
+        # 离开风险卡
+        self._in_risk_card = False
         self._set_table_borders(card_table)
 
     def _handle_kpi_paragraph(self, node, container):
@@ -1487,10 +1965,136 @@ class HtmlToWordExporter:
         for run in p.runs:
             self._set_run_shading(run, "F5F7FA")
 
-    def _handle_risk_card_head(self, node, container):
+    def _handle_risk_harm_box(self, node, container):
+        """风险危害解读框（对应 HTML .sr-risk-harm-box，Figma 425:11151）："""
+        # 颜色常量（与 HTML CSS 变量保持一致）
+        box_bg = "EDF1F7"      # --color-graphite-l40 = --sr-surface-muted
+        badge_bg = "1C6EFF"    # sr-risk-harm-box__badge 渐变蓝色（简化为纯色）
+        badge_fg = "FFFFFF"     # badge 白字
+        desc_color = "6B7A99"  # --tx2 = --sr-text-secondary
+
+        # Word 两个表格之间强制要有段落。前一个兄弟节点是 table（C2/病毒/漏洞
+        # 利用事件表）时，Word 会把两个相邻表格自动合并成一个，导致 risk-harm-box
+        # 被吸进事件表里。这里无条件插入一个分隔段落，提供 6pt 间隙，并避免合并。
+        sep_p = container.add_paragraph()
+        sep_p.paragraph_format.space_before = Pt(0)
+        sep_p.paragraph_format.space_after = Pt(6)
+        sep_p.paragraph_format.line_spacing = 1
+        sep_run = sep_p.add_run("")
+        sep_run.font.size = Pt(1)
+
+        # 创建 1×1 表格作为外框
+        table = container.add_table(rows=1, cols=1)
+        table.autofit = False
+        table.allow_autofit = False
+        # 表格宽度 = 页面内容宽度（与前面事件表对齐左右边）
+        cfg = self.config.get("docx", {})
+        page_w_mm = cfg.get("page_width_mm", 210)
+        margin_mm = cfg.get("margin_mm", 20)
+        content_w_mm = page_w_mm - 2 * margin_mm
+        tbl = table._tbl
+        tblPr = tbl.find(qn("w:tblPr"))
+        if tblPr is None:
+            tblPr = OxmlElement("w:tblPr")
+            tbl.insert(0, tblPr)
+        # 移除 python-docx 默认套用的 tblStyle（带灰色边框），改由我们直接控制
+        for style_tag in ("w:tblStyle",):
+            existing = tblPr.findall(qn(style_tag))
+            for e in existing:
+                tblPr.remove(e)
+        # 移除默认 tblBorders（python-docx 默认带 single D3D7DE 边框）
+        existing_borders = tblPr.findall(qn("w:tblBorders"))
+        for e in existing_borders:
+            tblPr.remove(e)
+        # tblInd=0（左对齐页面内容区左边，与前面事件表对齐）
+        existing_ind = tblPr.findall(qn("w:tblInd"))
+        for e in existing_ind:
+            tblPr.remove(e)
+        tblInd = OxmlElement("w:tblInd")
+        tblInd.set(qn("w:w"), "0")
+        tblInd.set(qn("w:type"), "dxa")
+        tblPr.append(tblInd)
+        # tblLayout=fixed
+        layout = OxmlElement("w:tblLayout")
+        layout.set(qn("w:type"), "fixed")
+        tblPr.append(layout)
+        # tblW 总宽
+        tblW = OxmlElement("w:tblW")
+        tblW.set(qn("w:type"), "dxa")
+        tblW.set(qn("w:w"), str(int(round(content_w_mm * 1440 / 25.4))))
+        tblPr.append(tblW)
+        # 单元格 margins（模拟 box padding：上下 8pt 左右 12pt）
+        tblCellMar = OxmlElement("w:tblCellMar")
+        # 左右 padding 用 108 twips（与事件表一致，确保 risk-harm-box 内容区左右边
+        # 与事件表对齐）；上下 padding 160 twips 保持框内留白
+        for side, twips in (("top", 160), ("bottom", 160), ("left", 108), ("right", 108)):
+            mar = OxmlElement(f"w:{side}")
+            mar.set(qn("w:w"), str(twips))
+            mar.set(qn("w:type"), "dxa")
+            tblCellMar.append(mar)
+        tblPr.append(tblCellMar)
+        # 表格边框：设为 nil（无边框），HTML .sr-risk-harm-box 视觉只有底色无外框线
+        tblBorders = OxmlElement("w:tblBorders")
+        for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+            border = OxmlElement(f"w:{side}")
+            border.set(qn("w:val"), "nil")
+            tblBorders.append(border)
+        tblPr.append(tblBorders)
+        # tblGrid + gridCol
+        tblGrid = OxmlElement("w:tblGrid")
+        gridCol = OxmlElement("w:gridCol")
+        gridCol.set(qn("w:w"), str(int(round(content_w_mm * 1440 / 25.4))))
+        tblGrid.append(gridCol)
+        tbl.insert(1, tblGrid)
+        cell = table.rows[0].cells[0]
+        # 单元格底色
+        self._set_cell_shading(cell, box_bg)
+
+        # 复用单元格默认首段（python-docx 创建单元格时会自带一个空段落），
+        # 避免再 add_paragraph 造成首段空行 + badge 段两段结构。
+        content_p = cell.paragraphs[0]
+        content_p.paragraph_format.space_before = Pt(0)
+        content_p.paragraph_format.space_after = Pt(0)
+        content_p.paragraph_format.line_spacing = 1.15
+        badge_text = " 风险危害 "  # 左右各加一个空格模拟 padding
+        badge_run = content_p.add_run(badge_text)
+        badge_run.bold = True
+        badge_run.font.size = Pt(10.5)
+        badge_run.font.color.rgb = RGBColor.from_string(badge_fg)
+        self._set_run_shading(badge_run, badge_bg)
+
+        # 描述文本：取 node 内 <p> 元素文本，作为同段后续 run
+        desc_text = ""
+        p_tag = node.find("p")
+        if p_tag is not None:
+            desc_text = p_tag.get_text(" ", strip=True)
+        else:
+            # 兜底：取 badge span 之外的所有文本
+            desc_text = node.get_text(" ", strip=True).replace("风险危害", "", 1).strip()
+        if desc_text:
+            # badge 和描述之间加一个空格分隔
+            sep_run = content_p.add_run(" ")
+            sep_run.font.size = Pt(10.5)
+            desc_run = content_p.add_run(desc_text)
+            desc_run.font.size = Pt(10.5)
+            desc_run.font.color.rgb = RGBColor.from_string(desc_color)
+
+
+    def _handle_risk_card_head(self, node, container, reuse_first_para=False):
         """风险卡头部：把 sr-tag 和 sr-risk-card__title 拼到同一段落，
-        单行带底色块呈现（对应 HTML header.sr-risk-card__head）。"""
-        p = container.add_paragraph()
+        单行带底色块呈现（对应 HTML header.sr-risk-card__head）。
+
+        reuse_first_para=True 时复用 cell 默认的第一个空段落，避免出现额外
+        空段（用户 mark"这个换行不要"）。
+
+        标题字号 13pt（>11pt，满足用户 mark"这行字体字号要大于11"）。"""
+        if reuse_first_para and container.is_cell and container.cell.paragraphs:
+            p = container.cell.paragraphs[0]
+            # 清掉默认空 run
+            for r in list(p.runs):
+                r._element.getparent().remove(r._element)
+        else:
+            p = container.add_paragraph()
         for child in node.children:
             if isinstance(child, NavigableString):
                 text = str(child).strip()
@@ -1503,6 +2107,8 @@ class HtmlToWordExporter:
                     if title_text:
                         run = p.add_run(title_text)
                         run.bold = True
+                        run.font.size = Pt(13)  # >11pt（用户 mark）
+                        run.font.color.rgb = RGBColor.from_string("1A1F36")
                 elif "sr-tag--light" in classes:
                     # sr-tag--light 优先（同时带 --medium/--blue/--success 时也走 light 浅底深字样式）
                     text = child.get_text(" ", strip=True)
@@ -1597,6 +2203,14 @@ class HtmlToWordExporter:
         self._render_inline_with_br(p, node)
         # 解析 inline style 中的 text-indent:Nem，设 Word 首行缩进
         self._apply_text_indent(node, p, container)
+        # 风险卡内的 p 正文首行缩进 2em（用户 mark"首行缩进"）
+        if getattr(self, "_in_risk_card", False) and not p.paragraph_format.first_line_indent:
+            # 检查父节点是否是 sr-risk-field（"问题描述"/"风险影响"等下面的正文）
+            parent = node.parent
+            if parent is not None and "sr-risk-field" in (parent.get("class") or []):
+                from docx.shared import Mm as _Mm
+                # 2em ≈ 21pt ≈ 7.4mm，按 10.5pt 字号近似
+                p.paragraph_format.first_line_indent = _Mm(7.4)
         if not p.runs:
             # 没有任何 run 说明未写入内容，移除该空段
             p._element.getparent().remove(p._element)
@@ -1800,6 +2414,7 @@ class HtmlToWordExporter:
                     self._collect_inline_parts(child, current_text, parts, inherited_fmt)
 
     def _map_list(self, node, container, ordered=False):
+        from docx.shared import Mm as _Mm
         for li in node.find_all("li", recursive=False):
             # 若 <li> 自带手写序号（如 sr-risk-step__num / sr-risk-step），
             # 跳过 Word 自动编号样式。把"手写序号 + 标题"作为单独段落，再
@@ -1816,7 +2431,11 @@ class HtmlToWordExporter:
             if not text:
                 continue
             style = "List Number" if ordered else "List Bullet"
-            container.add_paragraph(text, style=style)
+            p = container.add_paragraph(text, style=style)
+            # 用户 mark"所有项目符号这里，整体增加一个缩进"：
+            # 风险卡步骤下的子列表项加 10mm 左缩进（5mm step + 5mm 子列表）
+            if getattr(self, "_in_risk_step_list", False):
+                p.paragraph_format.left_indent = _Mm(10)
 
     def _map_risk_step(self, li, container):
         """渲染 sr-risk-step：手写序号 + 标题段 + 嵌套列表段落。
@@ -1833,9 +2452,10 @@ class HtmlToWordExporter:
             </div>
           </li>
         生成：
-          - 加粗段落"1 网络防护"（无 Word 自动序号）
-          - 嵌套 <ul> 各 <li> 作为 List Bullet 段落
+          - 加粗段落"1 网络防护"（无 Word 自动序号，左缩进 5mm）
+          - 嵌套 <ul> 各 <li> 作为 List Bullet 段落（整体再加 5mm 缩进 = 10mm）
         """
+        from docx.shared import Mm as _Mm
         num_span = li.find(class_="sr-risk-step__num")
         num_text = num_span.get_text(strip=True) if num_span else ""
         # 找标题
@@ -1845,18 +2465,23 @@ class HtmlToWordExporter:
         head_text = f"{num_text} {title_text}".strip() if title_text else num_text
         if head_text:
             p = container.add_paragraph()
+            # 用户 mark"所有编号这里，整体增加一个缩进"：左缩进 5mm
+            p.paragraph_format.left_indent = _Mm(5)
             run = p.add_run(head_text)
             run.bold = True
             self._strip_paragraph_num_pr(p)
         # 处理内层嵌套列表（sr-risk-step__list 下的 <ul>/<ol>）
         nested_lists = li.find_all(["ul", "ol"], recursive=True)
         # 排除被嵌套 sr-risk-step（不会有，因为 sr-risk-step 在 li 上）
+        # 标记：风险卡步骤下的子列表需要额外加 5mm 缩进
+        self._in_risk_step_list = True
         for nested in nested_lists:
             # 避免重复处理：只处理直接属于本 li 的、不被更深层 sr-risk-step 包裹的
             # 简化：用 recursive=True 找到所有，但跳过 nested 的子 ul/ol
             if nested.find_parent(class_="sr-risk-step") is not li:
                 continue
             self._map_list(nested, container, ordered=(nested.name == "ol"))
+        self._in_risk_step_list = False
 
     def _image_max_size(self):
         """计算页面可用宽高（mm），用于限制图片不超页。"""
@@ -1895,19 +2520,49 @@ class HtmlToWordExporter:
         return Mm(width_mm), Mm(height_mm)
 
     def _map_image(self, node, container):
-        """处理 base64 data:image 与截图占位。"""
+        """处理 base64 data:image 与截图占位。
+
+        截图占位 <img data-snapshot="...">：若 _snapshot_titles[snap] 存在，
+        先在 Word 里写小标题段（与 HTML 中 .chart-title 同样的样式），
+        再插图，最后在图下加居中"图 N-M 标题"形式的命名段。
+        """
         snap = node.get("data-snapshot")
         if snap and snap in self._snapshot_map:
             img_path = self._snapshot_map[snap]
             if not os.path.exists(img_path):
                 _log(f"截图文件不存在（忽略）: {img_path}", "WARNING")
                 return
+            titles = getattr(self, "_snapshot_titles", {}) or {}
+            chart_title = (titles.get(snap) or "").strip()
+            # 图前：写小标题（沿用 HTML .chart-title 视觉：左对齐、加粗、11pt）
+            if chart_title:
+                title_p = container.add_paragraph()
+                title_p.paragraph_format.space_before = Pt(4)
+                title_p.paragraph_format.space_after = Pt(2)
+                t_run = title_p.add_run(chart_title)
+                t_run.bold = True
+                t_run.font.size = Pt(11)
+                t_run.font.color.rgb = RGBColor.from_string("1A1F36")
             w, h = self._fit_image_size(img_path)
             if w is None or h is None:
                 content_w = self.config["docx"]["page_width_mm"] - 2 * self.config["docx"]["margin_mm"]
-                container.add_picture(img_path, width=Mm(content_w))
+                pic_p = container.add_picture(img_path, width=Mm(content_w))
             else:
-                container.add_picture(img_path, width=w, height=h)
+                pic_p = container.add_picture(img_path, width=w, height=h)
+            # 图片段段后间距强制为 0，让下方图注紧贴图片
+            if pic_p is not None:
+                pic_p.paragraph_format.space_before = Pt(0)
+                pic_p.paragraph_format.space_after = Pt(0)
+            # 图后：居中"图 N-M 标题"形式的命名段（编号按图出现顺序自增）
+            if chart_title:
+                self._chart_caption_index = getattr(self, "_chart_caption_index", 0) + 1
+                caption_p = container.add_paragraph()
+                caption_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                caption_p.paragraph_format.space_before = Pt(2)
+                caption_p.paragraph_format.space_after = Pt(0)
+                c_run = caption_p.add_run(f"图 {self._chart_caption_index} {chart_title}")
+                c_run.font.size = Pt(9)
+                c_run.font.color.rgb = RGBColor.from_string("6F7785")
             return
         src = node.get("src") or ""
         if src.startswith("data:image/"):
@@ -1983,13 +2638,12 @@ class HtmlToWordExporter:
                     ci += 1
                 cell = table.cell(ri, ci)
                 self._render_cell_text_with_br(cell, cell_soup)
-                # 文档信息表单元格垂直居中（水平保持左对齐）
-                if is_doc_info_table:
-                    try:
-                        from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
-                        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-                    except Exception as e:
-                        _log(f"设置单元格垂直居中失败: {e}", "WARNING")
+                # 所有表格单元格默认垂直居中（水平对齐保持原状）
+                try:
+                    from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+                    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                except Exception as e:
+                    _log(f"设置单元格垂直居中失败: {e}", "WARNING")
                 if colspan > 1:
                     for k in range(1, colspan):
                         try:
@@ -2003,8 +2657,13 @@ class HtmlToWordExporter:
                             occupied[(ri + r, ci + k)] = True
                 if is_header_row or cell_soup.name == "th":
                     self._apply_table_header_cell_style(cell)
+                    # 表头默认不换行（用户要求：表头不换行）
+                    self._set_cell_no_wrap(cell)
+                # 单元格 class 含 sr-no-wrap 时不换行（用于时间列等需要保持完整的字段）
+                if _has_class(cell_soup, "sr-no-wrap"):
+                    self._set_cell_no_wrap(cell)
                 ci += colspan
-        self._set_table_column_widths_by_grid(table, grid)
+        self._set_table_column_widths_by_grid(table, grid, node)
         self._set_table_borders(table)
 
     # 表头样式：浅蓝底（#EDF1F7）+ 深色字（#1A1F36），与 HTML .sr-tbl th 保持一致
@@ -2031,8 +2690,26 @@ class HtmlToWordExporter:
         shd.set(qn("w:fill"), hex_color)
         tcPr.append(shd)
 
-    def _set_table_column_widths_by_grid(self, table, grid):
+    def _set_cell_no_wrap(self, cell):
+        """给单元格设置 <w:noWrap/>，使 Word 不自动换行该单元格内容。
+
+        用于表头和"时间"等需要保持完整不换行的字段。fixed layout 下 Word
+        会按 noWrap 单元格的内容宽度自动撑大该列 gridCol。
+        """
+        tcPr = cell._tc.get_or_add_tcPr()
+        old = tcPr.find(qn("w:noWrap"))
+        if old is None:
+            no_wrap = OxmlElement("w:noWrap")
+            tcPr.append(no_wrap)
+
+    def _set_table_column_widths_by_grid(self, table, grid, table_soup=None):
         """根据全表所有行计算列宽并固定到 Word 表格。
+
+        优先级：
+          1. 若 table_soup 含 data-col-widths 属性（mm 单位逗号分隔），直接按
+             指定宽度设置 gridCol，跳过权重分配。用于人工指定列宽的表（评级表、
+             事件表等）。
+          2. 否则按权重自动分配 + noWrap 最小列宽兜底（见下文）。
 
         旧 _set_table_column_widths_by_header 只用 grid[0] 算权重，遇到首行列数
         < max_cols 的表（如文档信息表：首行 2 列、中间行 4 列），zip 会截断，
@@ -2064,16 +2741,45 @@ class HtmlToWordExporter:
         page_w_mm = cfg.get("page_width_mm", 210)
         margin_mm = cfg.get("margin_mm", 20)
         content_w_mm = page_w_mm - 2 * margin_mm
+
+        # 优先级 1：data-col-widths 人工指定列宽（mm 单位逗号分隔），直接使用
+        if table_soup is not None:
+            raw_widths = table_soup.get("data-col-widths")
+            if raw_widths:
+                try:
+                    widths = [float(w.strip()) for w in raw_widths.split(",") if w.strip()]
+                except (ValueError, TypeError):
+                    widths = []
+                if len(widths) == max_cols:
+                    col_widths_mm = widths
+                    # 关闭 autofit，设置 tblLayout=fixed，按指定列宽渲染
+                    table.autofit = False
+                    table.allow_autofit = False
+                    tbl = table._tbl
+                    tblPr = tbl.find(qn("w:tblPr"))
+                    if tblPr is None:
+                        tblPr = OxmlElement("w:tblPr")
+                        tbl.insert(0, tblPr)
+                    layout = tblPr.find(qn("w:tblLayout"))
+                    if layout is None:
+                        layout = OxmlElement("w:tblLayout")
+                        tblPr.append(layout)
+                    layout.set(qn("w:type"), "fixed")
+                    self._apply_gridcol_widths(table, col_widths_mm)
+                    return
         min_col_mm = 10
 
-        # 扫全 grid，按 colspan 展开到 max_cols 槽位，每列取出现过的最大权重
+        # 扫全 grid，按 colspan 展开到 max_cols 槽位，每列取出现过的最大权重；
+        # 同时记录 noWrap 单元格的"需求最小列宽"
         col_weights = [0.0] * max_cols
+        col_no_wrap_min = [0.0] * max_cols  # noWrap 单元格需求的最小列宽（mm）
         for row_data in grid:
             ci = 0
             for cell_soup, colspan, rowspan in row_data:
                 n = max(int(colspan or 1), 1)
                 if cell_soup is None:
                     weight = 0.0
+                    text = ""
                 else:
                     text = cell_soup.get_text(strip=True) or ""
                     # 中文字符（ord > 127）按 2 宽度，其他按 1
@@ -2083,6 +2789,17 @@ class HtmlToWordExporter:
                 for k in range(n):
                     if ci + k < max_cols and each_w > col_weights[ci + k]:
                         col_weights[ci + k] = each_w
+                # noWrap 单元格（含 th）按文本宽度计算需求最小列宽
+                if cell_soup is not None and (
+                    _has_class(cell_soup, "sr-no-wrap") or cell_soup.name == "th"
+                ):
+                    # 文本宽度估算：中文按 3.7mm/字、ASCII 按 1.9mm/字（10.5pt
+                    # 字号下中文实际渲染宽度含字间距），左右各 +2mm padding 共 4mm
+                    text_mm = sum(3.7 if ord(c) > 127 else 1.9 for c in text) + 4
+                    each_min = text_mm / n
+                    for k in range(n):
+                        if ci + k < max_cols and each_min > col_no_wrap_min[ci + k]:
+                            col_no_wrap_min[ci + k] = each_min
                 ci += n
         # 空列兜底权重 1.0，避免后续归一时除 0 或被忽略
         col_weights = [max(w, 1.0) for w in col_weights]
@@ -2095,11 +2812,16 @@ class HtmlToWordExporter:
             total_weight = sum(col_weights)
             col_widths_mm = [content_w_mm * w / total_weight for w in col_weights]
             col_widths_mm = [max(w, min_col_mm) for w in col_widths_mm]
-            # 拉底后总宽可能超 content_w，按比例归一
+            # 应用 noWrap 需求最小列宽：与权重分配结果取较大值
+            col_widths_mm = [max(col_widths_mm[i], col_no_wrap_min[i]) for i in range(max_cols)]
+            # 拉底/取较大值后总宽可能超 content_w，按比例归一到 content_w_mm
             total = sum(col_widths_mm)
             if total > content_w_mm and total > 0:
                 scale = content_w_mm / total
                 col_widths_mm = [w * scale for w in col_widths_mm]
+
+        # 若总宽仍超出 content_w_mm（理论上归一后不会，保留兜底），改用 autofit
+        use_autofit = sum(col_widths_mm) > content_w_mm + 0.1
 
         # 关闭 autofit，设置 tblLayout=fixed
         table.autofit = False
@@ -2114,7 +2836,7 @@ class HtmlToWordExporter:
         if layout is None:
             layout = OxmlElement("w:tblLayout")
             tblPr.append(layout)
-        layout.set(qn("w:type"), "fixed")
+        layout.set(qn("w:type"), "autofit" if use_autofit else "fixed")
 
         # tblW 总宽（dxa = twips）
         total_twips = int(round(content_w_mm * 1440 / 25.4))
@@ -2126,6 +2848,29 @@ class HtmlToWordExporter:
         tblW.set(qn("w:w"), str(total_twips))
 
         # 各 gridCol 宽度（twips）
+        tblGrid = tbl.find(qn("w:tblGrid"))
+        if tblGrid is None:
+            return
+        for gridCol, width_mm in zip(tblGrid.findall(qn("w:gridCol")), col_widths_mm):
+            twips = int(round(width_mm * 1440 / 25.4))
+            gridCol.set(qn("w:w"), str(twips))
+
+    def _apply_gridcol_widths(self, table, col_widths_mm):
+        """按给定列宽（mm）设置 tblW 总宽 + 各 gridCol 宽度，tblLayout 已由调用方设置。"""
+        if not col_widths_mm:
+            return
+        tbl = table._tbl
+        tblPr = tbl.find(qn("w:tblPr"))
+        if tblPr is None:
+            tblPr = OxmlElement("w:tblPr")
+            tbl.insert(0, tblPr)
+        total_twips = int(round(sum(col_widths_mm) * 1440 / 25.4))
+        tblW = tblPr.find(qn("w:tblW"))
+        if tblW is None:
+            tblW = OxmlElement("w:tblW")
+            tblPr.append(tblW)
+        tblW.set(qn("w:type"), "dxa")
+        tblW.set(qn("w:w"), str(total_twips))
         tblGrid = tbl.find(qn("w:tblGrid"))
         if tblGrid is None:
             return
@@ -2295,6 +3040,9 @@ class HtmlToWordExporter:
             parts.append(("text", "".join(current_text), None))
         # 写入 cell：使用段落+run 的标准方式，<br> 通过 run.add_break() 实现
         paragraph = cell.paragraphs[0]
+        # 表格单元格段落段后间距强制为 0（避免继承 Normal 默认 10pt 造成多行表格行高虚高）
+        paragraph.paragraph_format.space_after = Pt(0)
+        paragraph.paragraph_format.space_before = Pt(0)
         # 清空默认 run
         for r in list(paragraph.runs):
             r._element.getparent().remove(r._element)
