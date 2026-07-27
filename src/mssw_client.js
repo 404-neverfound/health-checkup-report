@@ -1289,6 +1289,12 @@ async function fetchIncidentCaseStudy(options = {}) {
   }
 
   const attackTimeline = [];
+  // 网页查询典型案例告警时不限制开始时间；不能使用报告生成时间范围，
+  // 否则事件虽被 ATT&CK 命中，但其告警发生在报告起始时间之前时会查不到详情。
+  const attackAlertQueryRange = {
+    ...options.range,
+    begin: 0
+  };
   for (const hit of techniqueHits) {
     let alertRow = null;
     try {
@@ -1297,7 +1303,7 @@ async function fetchIncidentCaseStudy(options = {}) {
         options.msswCookieInfo,
         options.msswBaseUrl,
         options.companyId,
-        options.range,
+        attackAlertQueryRange,
         alertIds,
         hit.stageId,
         hit.techniqueId
@@ -1334,11 +1340,16 @@ async function fetchIncidentCaseStudy(options = {}) {
 
   try {
     logInfo(options.logger, `[典型案例] 查询防守侧时间线: incidentId=${selected.incidentId}`);
+    const defenseIncidentQueryRange = {
+      ...options.range,
+      // 网页查询事件详情时不限制开始时间，避免旧事件被报告起始时间过滤掉。
+      begin: 0
+    };
     const incidentRow = await queryCaseStudyIncidentTimeline(
       options.msswCookieInfo,
       options.msswBaseUrl,
       options.companyId,
-      options.range,
+      defenseIncidentQueryRange,
       selected.incidentId
     );
     result.defenseTimeline = buildDefenseTimelineFromIncidentRow(incidentRow);
