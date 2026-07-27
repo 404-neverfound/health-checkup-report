@@ -162,6 +162,7 @@ def parse_args():
     parser.add_argument("--start", default=None)
     parser.add_argument("--end", default=None)
     parser.add_argument("--policy-status", default="")
+    parser.add_argument("--mock", action="store_true", help="使用本地 JSON 文件模拟策略检查数据，跳过接口调用")
     parser.add_argument("--base-path", default=".")
     parser.add_argument("--asset-sheet", default="Sheet1")
     parser.add_argument("--event-sheet", default="事件表")
@@ -199,6 +200,7 @@ def maybe_export_policy(args):
         cookie_path=args.cookie_path,
         output_path=policy_excel_path,
         json_output_path=policy_json_path,
+        mock=args.mock,
     )
     result = exporter.run()
     return {
@@ -229,13 +231,17 @@ def main():
     config_path = write_temp_config(config)
 
     try:
+        print("[branch1] 开始评分计算 (run_scoring) ...", flush=True)
         scoring_result = run_scoring(config_path)
+        print("[branch1] 评分计算完成", flush=True)
+        print("[branch1] 开始防护有效性统计 (run_data_stats) ...", flush=True)
         protection_effectiveness = run_data_stats(
             args.asset_path,
             policy_artifact["jsonPath"],
             args.asset_header_row,
             args.asset_data_start_row,
         )
+        print("[branch1] 防护有效性统计完成", flush=True)
     finally:
         try:
             os.unlink(config_path)

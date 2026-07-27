@@ -18,23 +18,30 @@ description: 生成指定客户、指定时间段的安全体检 HTML 报告。�
 ```powershell
 node "$HOME\.openclaw\workspace\skills\health-checkup-report\health_report.js" `
   --customer "<客户名>" `
+  --af "<true|false>" `
+  --sip "<true|false>" `
   --mssw-cookie-path "M:\Users\$env:USERNAME\Downloads\cookies.txt" `
   --xdr-cookie-path "M:\Users\$env:USERNAME\Downloads\xdr_cookies.txt"
 ```
+
+- `--af`：客户是否已开通**防火墙云情报网关**订阅（true/false，必填）
+- `--sip`：客户是否已开通 **SIP 云端情报检测**（true/false，必填）
+
+主文件会结合接口查到的 AF / SIP 设备数量综合判断：即使参数为 true，但对应设备数量为 0，仍按"没有设备"处理，话术会引导购买设备。
 
 骨架开发阶段可使用 mock：
 
 ```powershell
 node "$HOME\.openclaw\workspace\skills\health-checkup-report\health_report.js" `
-  --customer "<客户名>"
+  --customer "<客户名>" --af true --sip true
 ```
 
-如需显式指定时间，`--start` 和 `--end` 必须同时传入。
+如需显式指定时间，`--start` 和 `--end` 必须同时传入。**查询时间范围最大 30 天**，超出会报错提示用户缩小范围。
 
-未传时间时，脚本会通过 MSSW 项目列表接口自动推导：
+未传时间时，脚本会通过 MSSW 项目列表接口自动推导，并在 30 天上限内自动截取：
 
-- 开始时间 = 最早 `service_start`
-- 结束时间 = `min(报告生成时刻, 最早非空 service_end)`
+- 开始时间 = `max(最早 service_start, 结束时间 - 29 天)`
+- 结束时间 = `min(报告生成日前一天, 最早非空 service_end)`
 
 ## 输出
 
@@ -45,5 +52,9 @@ node "$HOME\.openclaw\workspace\skills\health-checkup-report\health_report.js" `
 生成必须有：
 
 - `customer`
+- `af`（是否开通防火墙云情报网关订阅）
+- `sip`（是否开通SIP云端情报检测）
 
-缺少客户时先追问，不要猜。时间没传时不要追问，直接走默认时间推导。
+缺少客户时先追问，不要猜。时间没传时不要追问，直接走默认时间推导（自动取最近 30 天）。
+
+**订阅参数反问**：如果用户只说"生成 xxx 客户的安全体检报告"但没有提及订阅（af / sip 缺失），**必须先反问用户**是否已开通防火墙云情报网关、是否已开通 SIP 云端情报检测，拿到明确答复后再以 `--af` / `--sip` 传入主文件，不要猜测默认值。

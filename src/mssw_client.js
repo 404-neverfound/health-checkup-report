@@ -8,6 +8,7 @@ const http = require('http');
 const path = require('path');
 
 const { encodePath } = require('./path_helper');
+const { pagedExportMsswAssetList } = require('./mssw_asset_paged_export');
 const {
   removeIncidentRows,
   parseIncidentGptStats,
@@ -40,6 +41,7 @@ const MSSW_ASSET_DOWNLOAD_ENDPOINT = '/apps/asset/view/asset/download_file';
 const MSSW_ASSET_COUNT_ENDPOINT = '/apps/asset/view/asset/asset_view/count?_method=GET';
 const MSSW_INCIDENT_TABLE_ENDPOINT = '/gateway/mss-mdr/web/api/mssw/mss-mdr/v1/incident_table';
 const MSSW_LOG_SEARCH_COUNT_ENDPOINT = '/gateway/log-search-center-service/datalake/v1/ckCount';
+const SECURITY_CHECK_REPORT_STATS_ENDPOINT = '/gateway/log-search-center-service/datalake/v1/personalized_report/security_check_report_stats';
 const ATTCK_COUNT_ENDPOINT = '/ngsoc/INCIDENT/api/v1/incidents/attckCount';
 const INCIDENT_TABLE_QUERY_ENDPOINT = '/ngsoc/INCIDENT/api/v1/table/query/incidentTableQueryHandler';
 const CASE_STUDY_SEVERITY_ORDER = ['严重', '高危', '中危', '低危'];
@@ -1446,6 +1448,138 @@ async function fetchMsswAlertTableCount(cookieInfo, msswBaseUrl, companyId, opti
   };
 }
 
+function buildContainedAlertCountRequestBody({ begin, end }) {
+  return {
+    extensionParams: null,
+    spl: {
+      mappedSpl: 'filter 处置动作  in { "已遏制\\(组件同步\\)", "已遏制\\(已封禁地址\\)" }',
+      originalSpl: 'filter 处置动作  in { "已遏制\\(组件同步\\)", "已遏制\\(已封禁地址\\)" }',
+      extensionParams: {
+        frontRender: [{
+          displayField: '处置动作',
+          field: 'dealAction',
+          value: ['已遏制(组件同步)', '已遏制(已封禁地址)'],
+          headerType: 'alertDealAction',
+          searchType: 'selector',
+          valueText: '已遏制(组件同步), 已遏制(已封禁地址)',
+          isValueNegate: false,
+          type: 'string',
+          filterSelect: 'renderValue'
+        }],
+        mappedInputSpl: '',
+        originalInputSpl: ''
+      }
+    },
+    serviceInfo: ALERT_TABLE_SERVICE_INFO,
+    globalCondition: {
+      branchIds: [],
+      time: {
+        timeField: 'lastTime',
+        begin: { type: 'absolute', value: begin },
+        end: { type: 'absolute', value: end }
+      }
+    },
+    table: {
+      enable: true,
+      viewName: 'AlertView',
+      aggregationStrategies: null,
+      tableFields: buildAlertTableFields(),
+      pageNum: 1,
+      pageSize: 50,
+      serviceInfo: ALERT_TABLE_SERVICE_INFO,
+      subTable: null,
+      rightClicked: false,
+      selectAllPage: true,
+      routers: [{
+        icon: null,
+        path: '/incident/event/detail',
+        type: 'drillDown',
+        params: null,
+        actionParams: {
+          quarantineHostDisableFlag: '$quarantineHostDisableFlag',
+          disposedDisableFlag: '$disposedDisableFlag',
+          ignoreDisableFlag: '$ignoreDisableFlag',
+          trustFileDisableFlag: '$trustFileDisableFlag',
+          disposeFileDisableFlag: '$disposeFileDisableFlag',
+          soarDisableFlag: '$soarDisableFlag',
+          orderDisableFlag: '$orderDisableFlag',
+          disposingDisableFlag: '$disposingDisableFlag',
+          banIpDisableFlag: '$banIpDisableFlag',
+          gptResultStrategyDisableFlag: '$gptResultStrategyDisableFlag',
+          pendingDisableFlag: '$pendingDisableFlag',
+          toBeTransferDisableFlag: '$toBeTransferDisableFlag',
+          id: '$uuId',
+          customAlertGenerateIncidentDisableFlag: '$customAlertGenerateIncidentDisableFlag',
+          misReportDisableFlag: '$misReportDisableFlag'
+        },
+        applicableCols: ['name']
+      }],
+      rightActions: buildAlertTableRightActions(),
+      extensionParams: {}
+    },
+    tag: null,
+    viewName: 'AlertView',
+    model: 'simple',
+    autoRefresh: false,
+    viewInstanceId: ALERT_VIEW_INSTANCE_ID,
+    enableHistory: true
+  };
+}
+
+function buildAlertTableRightActions() {
+  // 返回与 buildAlertCountRequestBody 中 rightActions 一致的数组
+  var cols = ['responseHead', 'smtpTo', 'devSourceNames', 'sendFrom', 'occurTime', 'ignoreDisableFlag', 'platformIsDelete', 'recommendation', 'threatSubType', 'ftpCwd', 'similarId', 'srcPort', 'platformHostBranchId', 'accessDirection', 'huntingDomains', 'xUserGroup', 'humanCheck', 'redisLogin', 'tenant', 'fullTextSearch', 'quarantineHostDisableFlag', 'hostIp', 'respStatus', 'devices', 'ndrSecdetectBreachMid', 'mitreid', 'dealStatus', 'threatTypeProxy', 'aiRuleId', 'aiRuleIds', 'vulnName', 'soarDisableFlag', 'ftpCommand', 'newFullTextSearch', 'redisPassword', 'incidentRelated', 'gptAction', 'redisCommandCall', 'dealTime', 'threatType', 'orderDisableFlag', 'mssStatus', 'domain', 'disposingDisableFlag', 'reqCookie', 'whiteStatus', 'engineName', 'customAlertGenerateIncidentDisableFlag', 'gptRespAction', 'natTransform', 'dataAuthorityOwner', 'ioaRuleRelated', 'responseBody', 'webmailAttachmentFilename', 'statusChangeDisableFlag', 'featureInfo', 'dstIpStr', 'incidentRootIds', 'trustFileDisableFlag', 'regionIds', 'investigationResult', 'smtpFrom', 'ftpUser', 'ruleIds', 'dstPort', 'webmailSubject', 'whiteListIds', 'pName', 'requestBody', 'srcAssetAnalyzeResultsStatus', 'pendingDisableFlag', 'addWhiteDisableFlag', 'misReportDisableFlag', 'suspectedMisReport', 'hostClassify1Id', 'disposedDisableFlag', 'combineType', 'updateTime', 'userAgent', 'fileMd5', 'dstIpInfos', 'url', 'firstTime', 'platformHostGroupIds', 'devUId', 'riskTag', 'gptJudgementEngine', 'stage', 'dealAction', 'hostCountryName', 'exploitCveId', 'gptResultStrategyDisableFlag', 'huntingMD5s', 'hostAddress', 'dstIp', 'xForwardedFor', 'dnsQueries', 'alertRuleId', 'lastTime', 'similarRuleId', 'gptRuleUid', 'mysqlCommand', 'xUserName', 'requestHead', 'sasUsername', 'checker', 'disposeFileDisableFlag', 'webmailFrom', 'hostBranchId', 'attckTechnique', 'disposalRecord', 'srcIpInfos', 'fileState', 'devUIdProxy', 'banIpDisableFlag', 'srcAssetAnalyzeResults', 'sqlServerRequest', 'smtpSubject', 'fusionAlert', 'srcIp', 'attackResult', 'read', 'gptStartAt', 'virusName', 'correctGptResult', 'snmpVersion', 'threatClass', 'huntingIps', 'proofType', 'cveId', 'webmailUser', 'isCascade', 'trafficForwardLocation', 'hostAssetAnalyzeResult', 'gptSubResult', 'insertTime', 'hostProvinceName', 'gptAnalyzeTrace', 'webmailTo', 'name', 'dataAuthorityBranchId', 'gptResult', '_id', 'gptEngineList', 'logType', 'hostIpStr', 'platformIdAndGroupId', 'gptEndAt', 'humanNote', 'description', 'platformRole', 'srcIpStr', 'fileStatus', 'humanInvestigation', 'hostGroupIds', 'gptAnalyzeTime', 'hostAssetId', 'severity', 'owner', 'hostClassifyId', 'confidence', 'attckSubTechnique', 'platformId', 'label', 'uploadTime', 'uuId', 'logTraceInfo', 'disposeTime', 'regionId', 'threatSubTypeProxy', 'operationLabels', 'dnsAnswers', 'toBeTransferDisableFlag', 'threatDefine', 'dataAuthorityCooperators', 'username'];
+  return [
+    { name: 'addFilter', type: 'filter', params: null, actionParams: null, applicableCols: cols },
+    { name: 'removeFilter', type: 'filter', params: null, actionParams: null, applicableCols: cols },
+    { name: 'copyCellText', type: 'copy', params: null, actionParams: null, applicableCols: null },
+    { name: 'copyRecordData', type: 'copy', params: null, actionParams: null, applicableCols: null },
+    { name: 'decodeTool', type: 'tool', params: null, actionParams: null, applicableCols: null },
+    { name: 'hostIpAssetDetail', type: 'assetJump', params: null, actionParams: { assetId: '$hostAssetId', ip: '$hostIp', uuId: '$uuId' }, applicableCols: ['hostIp'] },
+    { name: 'srcIpAssetDetail', type: 'assetJump', params: null, actionParams: { srcIpInfos: '$srcIpInfos', ip: '$.', uuId: '$uuId' }, applicableCols: ['srcIp'] },
+    { name: 'dstIpAssetDetail', type: 'assetJump', params: null, actionParams: { ip: '$.', uuId: '$uuId', dstIpInfos: '$dstIpInfos' }, applicableCols: ['dstIp'] },
+    { name: 'incidentBanIp', type: 'item', params: { disable: '$banIpDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'incidentQuarantineHost', type: 'item', params: { disable: '$quarantineHostDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'alertGptResultStrategy', type: 'addAlertGptResultStrategy', params: { disable: '$gptResultStrategyDisableFlag' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'incidentAddWhite', type: 'addWhite', params: { disable: '$addWhiteDisableFlag' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'alertStatusChange', type: 'statusChange', params: { disable: '$statusChangeDisableFlag' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'customAlertGenerateIncident', type: 'customAlertGenerateIncident', params: { disable: '$customAlertGenerateIncidentDisableFlag' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'incidentDisposeFile', type: 'item', params: { disable: '$disposeFileDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'incidentTrustFile', type: 'item', params: { disable: '$trustFileDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'jumpAllowList', type: 'jump', params: { hidden: true, disable: '$isCascade', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: ['whiteStatus'] },
+    { name: 'incidentIgnore', type: 'modifyDealStatus', params: { disable: '$ignoreDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'incidentMisReport', type: 'modifyDealStatus', params: { disable: '$misReportDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'incidentPending', type: 'modifyDealStatus', params: { disable: '$pendingDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'incidentDisposing', type: 'modifyDealStatus', params: { disable: '$disposingDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'incidentDisposed', type: 'modifyDealStatus', params: { disable: '$disposedDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'incidentSuppressed', type: 'modifyDealStatus', params: { disable: '$disposedDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'incidentToBeTransferred', type: 'transferred', params: { hidden: true, disable: '$toBeTransferDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'flowDisposalRecord', type: 'item', params: { disable: '$orderDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'soarDisposalRecord', type: 'item', params: { disable: '$soarDisableFlag', applicableLimit: '' }, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'incidentUnRead', type: 'modifyReadStatus', params: null, actionParams: { uuId: '$uuId' }, applicableCols: null },
+    { name: 'incidentRead', type: 'modifyReadStatus', params: null, actionParams: { uuId: '$uuId' }, applicableCols: null }
+  ];
+}
+
+async function fetchContainedAlertCount(cookieInfo, msswBaseUrl, companyId, options) {
+  const headers = buildMsswExportHeaders(cookieInfo, msswBaseUrl, companyId);
+  const msswHost = normalizeBaseUrl(msswBaseUrl || DEFAULT_MSSW_BASE_URL);
+  const url = 'https://' + msswHost + ALERT_QUERY_ENDPOINT;
+  const timeRange = resolveIncidentTimeRange(options);
+  const response = await requestJson(url, {
+    headers,
+    body: JSON.stringify(buildContainedAlertCountRequestBody(timeRange))
+  });
+
+  assertXdrApiSuccess(response, '已遏制告警数量接口');
+
+  const total = Number(response && response.data ? response.data.total : 0);
+  if (!Number.isFinite(total)) {
+    throw new Error('已遏制告警数量接口返回缺少 total: ' + JSON.stringify(response).slice(0, 500));
+  }
+  return total;
+}
+
 function mapProtectionTypeLabels(typeData) {
   const type = typeData && typeof typeData === 'object' ? typeData : {};
   const items = [
@@ -1469,7 +1603,7 @@ function mapExposureTypeLabels(typeData) {
   const items = [
     ['server', '服务器'],
     ['terminal', '终端'],
-    ['other', '其他']
+    ['other', '其它']
   ];
 
   return items
@@ -1485,7 +1619,7 @@ function mapAssetTypeLabels(typeData) {
   const items = [
     ['server', '服务器'],
     ['terminal', '终端'],
-    ['other', '其他']
+    ['other', '其它']
   ];
 
   return items
@@ -1573,16 +1707,22 @@ function getTmpExportDir() {
  * @param {string} inputPath 已下载并处理完成的 xlsx 文件路径
  * @returns {Promise<{filePath: string}>} 处理后的文件路径
  */
-async function processRiskListTable(tableType, inputPath) {
+async function processRiskListTable(tableType, inputPath, options = {}) {
   const scriptPath = path.join(__dirname, '..', 'scripts', 'process_risk_list_table.py');
   const outputDir = getTmpExportDir();
   await fsp.mkdir(outputDir, { recursive: true });
 
+  // 资产表需要支持合并待审核数据
+  const extraArgs = [];
+  if (tableType === 'asset' && options.waitApproveFilePath) {
+    extraArgs.push(encodePath(options.waitApproveFilePath));
+  }
+
   return new Promise((resolve, reject) => {
-    execFile('python3', [scriptPath, tableType, encodePath(inputPath), encodePath(outputDir)], { encoding: 'utf8', timeout: 60000, env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8' }) }, (error, stdout, stderr) => {
+    execFile('python3', [scriptPath, tableType, encodePath(inputPath), encodePath(outputDir), ...extraArgs], { encoding: 'utf8', timeout: 1800000, env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8' }) }, (error, stdout, stderr) => {
       if (error) {
         // Fallback: try python instead of python3
-        execFile('python', [scriptPath, tableType, encodePath(inputPath), encodePath(outputDir)], { encoding: 'utf8', timeout: 60000, env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8' }) }, (err2, stdout2, stderr2) => {
+        execFile('python', [scriptPath, tableType, encodePath(inputPath), encodePath(outputDir), ...extraArgs], { encoding: 'utf8', timeout: 1800000, env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8' }) }, (err2, stdout2, stderr2) => {
           if (err2) {
             const python3Detail = stderr ? stderr.trim() : error.message;
             const pythonDetail = stderr2 ? stderr2.trim() : err2.message;
@@ -1636,6 +1776,19 @@ async function fetchMsswAssetReadyToOutbound(cookieInfo, msswBaseUrl, companyId)
     throw new Error(`MSSW 7天内即将退库资产数量接口返回异常: ${response.msg || JSON.stringify(response).slice(0, 500)}`);
   }
   return response;
+}
+
+// 拉取资产总数（search_type=current），用于在导出前判断是否需要走分页兜底
+async function fetchMsswAssetTotalCount(cookieInfo, msswBaseUrl, companyId) {
+  const headers = buildMsswExportHeaders(cookieInfo, msswBaseUrl, companyId);
+  const url = `https://${normalizeBaseUrl(msswBaseUrl || DEFAULT_MSSW_BASE_URL)}${MSSW_ASSET_COUNT_ENDPOINT}`;
+  const body = JSON.stringify({ branch_id: 'all', search_type: 'current', start: 0, limit: 20 });
+  headers['content-length'] = String(Buffer.byteLength(body));
+  const response = await requestJson(url, { headers, body, timeout: 30000 });
+  if (!response || response.success !== true && response.code !== 0 && response.code !== '0') {
+    throw new Error(`MSSW 资产总数接口返回异常: ${JSON.stringify(response).slice(0, 500)}`);
+  }
+  return Number(response.total || 0);
 }
 
 function buildMsswIncidentTableRequestBody({ offset, limit, startTimeMs, endTimeMs, customerId }) {
@@ -2004,10 +2157,10 @@ async function exportMsswIncidentList(options) {
   };
 }
 
-function buildMsswAssetExportRequestBody(exportFields, ids = []) {
+function buildMsswAssetExportRequestBody(exportFields, ids = [], searchType = 'current') {
   return {
     branch_id: 'all',
-    search_type: 'current',
+    search_type: searchType,
     is_all: false,
     ids: Array.isArray(ids) ? ids : [],
     exclude_ids: [],
@@ -2033,16 +2186,17 @@ async function fetchMsswExportFields(cookieInfo, msswBaseUrl, companyId) {
   return response;
 }
 
-async function triggerMsswAssetExport(cookieInfo, msswBaseUrl, companyId, exportFields, ids = []) {
+async function triggerMsswAssetExport(cookieInfo, msswBaseUrl, companyId, exportFields, ids = [], searchType = 'current') {
   const msswHost = normalizeBaseUrl(msswBaseUrl || DEFAULT_MSSW_BASE_URL);
   const headers = buildMsswAssetExportHeaders(cookieInfo, msswHost, companyId);
   const url = `https://${msswHost}${MSSW_ASSET_EXPORT_ENDPOINT}`;
-  const body = JSON.stringify(buildMsswAssetExportRequestBody(exportFields, ids));
+  const body = JSON.stringify(buildMsswAssetExportRequestBody(exportFields, ids, searchType));
   headers['content-length'] = String(Buffer.byteLength(body));
+  // 默认导出接口超时 10 分钟；超时后由 exportMsswAssetList 兜底走分页接口
   const response = await requestJson(url, {
     headers,
     body,
-    timeout: 120000
+    timeout: 600000
   });
 
   const code = response && response.code;
@@ -2078,36 +2232,129 @@ async function downloadMsswAssetFile(cookieInfo, msswBaseUrl, companyId, filenam
 
 async function exportMsswAssetList(options) {
   const logger = options.logger;
-  logInfo(logger, '导出 MSSW 资产表');
+  logInfo(logger, '导出 MSSW 资产表（资产台账 + 待审核资产）');
   const cookieInfo = await readMsswCookieInfo(options.msswCookiePath);
   const msswBaseUrl = normalizeBaseUrl(options.msswBaseUrl || DEFAULT_MSSW_BASE_URL);
   const companyId = options.customerId || options.companyId || '';
   const assetIds = options.assetIds || [];
+  // 资产数量阈值：超过此值直接走分页导出，避免默认导出超时浪费时间
+  const PAGED_EXPORT_THRESHOLD = 10000;
 
   if (assetIds.length) {
     logInfo(logger, `使用 ${assetIds.length} 个指定资产 ID 导出`);
   } else {
-    logInfo(logger, '未指定资产 ID，将尝试导出全部资产（可能超时）');
+    logInfo(logger, '未指定资产 ID，将尝试导出全部资产');
   }
 
   const exportFieldsResponse = await fetchMsswExportFields(cookieInfo, msswBaseUrl, companyId);
+  const downloadDir = options.downloadDir || path.dirname(cookieInfo.resolvedPath);
 
-  const exportResponse = await triggerMsswAssetExport(cookieInfo, msswBaseUrl, companyId, exportFieldsResponse.data, assetIds);
-  const filename = String(exportResponse && exportResponse.data ? exportResponse.data : exportResponse && exportResponse.filename ? exportResponse.filename : '');
-  if (!filename) {
-    throw new Error(`MSSW 资产导出接口返回缺少文件名: ${JSON.stringify(exportResponse).slice(0, 500)}`);
+  let currentFilePath = '';
+  let waitApproveFilePath = '';
+  let currentFilename = '';
+  let currentExport = null;
+  let downloadResponse = null;
+
+  // 双维度触发分页导出：
+  // 1) 资产台账数量 > PAGED_EXPORT_THRESHOLD（默认 10000）时直接走分页，避免默认导出超时浪费时间
+  // 2) 默认导出超时（10 分钟）后兜底走分页
+  // 临时屏蔽：把 DISABLE_PAGED_EXPORT 置为 true 可绕过分页导出路径，回归"默认导出超时即失败"的旧行为
+  const DISABLE_PAGED_EXPORT = false;
+  const usingPagedFallback = { value: false };
+  let preCheckedTotal = null;
+
+  if (!DISABLE_PAGED_EXPORT && !assetIds.length) {
+    try {
+      preCheckedTotal = await fetchMsswAssetTotalCount(cookieInfo, msswBaseUrl, companyId);
+      logInfo(logger, `资产台账总数（接口预查）: ${preCheckedTotal}`);
+    } catch (error) {
+      logInfo(logger, `资产总数预查失败（继续走默认导出 + 超时兜底）: ${error.message}`);
+      preCheckedTotal = null;
+    }
   }
 
-  const downloadDir = options.downloadDir || path.dirname(cookieInfo.resolvedPath);
-  const downloaded = await downloadMsswAssetFile(cookieInfo, msswBaseUrl, companyId, filename, downloadDir);
-  logInfo(logger, `MSSW 资产表: ${downloaded.filePath}`);
+  if (!DISABLE_PAGED_EXPORT && preCheckedTotal !== null && preCheckedTotal > PAGED_EXPORT_THRESHOLD) {
+    logInfo(logger, `资产台账 ${preCheckedTotal} > ${PAGED_EXPORT_THRESHOLD}，直接走分页导出（避免默认导出超时浪费时间）`);
+    usingPagedFallback.value = true;
+    const pagedResult = await pagedExportMsswAssetList({
+      cookieInfo,
+      msswBaseUrl,
+      companyId,
+      outputDir: downloadDir,
+      pageSize: 1000,
+      searchType: 'both',
+      logger
+    });
+    currentFilePath = pagedResult.currentFilePath;
+    waitApproveFilePath = pagedResult.waitApproveFilePath || '';
+    currentFilename = currentFilePath ? path.basename(currentFilePath) : '';
+    downloadResponse = null;
+    currentExport = null;
+  } else {
+    // 第 1 步：尝试默认导出接口（超时 10 分钟）；超时后走分页兜底
+    try {
+      logInfo(logger, '导出资产台账（search_type=current，默认导出接口）');
+      currentExport = await triggerMsswAssetExport(cookieInfo, msswBaseUrl, companyId, exportFieldsResponse.data, assetIds, 'current');
+      currentFilename = String(currentExport && currentExport.data ? currentExport.data : currentExport && currentExport.filename ? currentExport.filename : '');
+      if (!currentFilename) {
+        throw new Error(`MSSW 资产台账导出接口返回缺少文件名: ${JSON.stringify(currentExport).slice(0, 500)}`);
+      }
+      const currentDownloaded = await downloadMsswAssetFile(cookieInfo, msswBaseUrl, companyId, currentFilename, downloadDir);
+      currentFilePath = currentDownloaded.filePath;
+      downloadResponse = { statusCode: currentDownloaded.statusCode, headers: currentDownloaded.headers };
+      logInfo(logger, `资产台账: ${currentFilePath}`);
 
-  // 后处理：删除指定列、重命名，保存到 tmp/exports
+      // 第 2 步：导出待审核资产（search_type=wait_approve）
+      try {
+        logInfo(logger, '导出待审核资产（search_type=wait_approve）');
+        const waitApproveExport = await triggerMsswAssetExport(cookieInfo, msswBaseUrl, companyId, exportFieldsResponse.data, assetIds, 'wait_approve');
+        const waitApproveFilename = String(waitApproveExport && waitApproveExport.data ? waitApproveExport.data : waitApproveExport && waitApproveExport.filename ? waitApproveExport.filename : '');
+        if (waitApproveFilename) {
+          const waitApproveDownloaded = await downloadMsswAssetFile(cookieInfo, msswBaseUrl, companyId, waitApproveFilename, downloadDir);
+          waitApproveFilePath = waitApproveDownloaded.filePath;
+          logInfo(logger, `待审核资产: ${waitApproveFilePath}`);
+        } else {
+          logInfo(logger, '待审核资产导出接口返回缺少文件名，仅使用资产台账数据');
+        }
+      } catch (error) {
+        logInfo(logger, `待审核资产导出失败（不影响主流程）: ${error.message}`);
+      }
+    } catch (error) {
+      const isTimeout = isTimeoutError(error);
+      if (!isTimeout) {
+        // 非超时错误：直接抛出
+        throw error;
+      }
+      if (DISABLE_PAGED_EXPORT) {
+        // 屏蔽分页导出：超时即失败，不再兜底
+        logInfo(logger, `默认导出接口超时（${error.message}），分页导出已屏蔽，直接失败`);
+        throw error;
+      }
+      logInfo(logger, `默认导出接口超时（${error.message}），切换分页接口兜底导出`);
+      usingPagedFallback.value = true;
+      const pagedResult = await pagedExportMsswAssetList({
+        cookieInfo,
+        msswBaseUrl,
+        companyId,
+        outputDir: downloadDir,
+        pageSize: 1000,
+        searchType: 'both',
+        logger
+      });
+      currentFilePath = pagedResult.currentFilePath;
+      waitApproveFilePath = pagedResult.waitApproveFilePath || '';
+      currentFilename = currentFilePath ? path.basename(currentFilePath) : '';
+      downloadResponse = null;
+    }
+  }
+
+  // 第 3 步：后处理 — 合并两个 xlsx，新增"审核状态"列
   let processedPath = '';
   try {
-    const processedResult = await processRiskListTable('asset', downloaded.filePath);
+    const processedResult = await processRiskListTable('asset', currentFilePath, { waitApproveFilePath });
     processedPath = processedResult.filePath;
-    logInfo(logger, `资产表已写入 tmp/exports: ${processedPath}（已删除 zdy、责任人电话、责任人(设备上报)、实时认证用户名）`);
+    const tag = usingPagedFallback.value ? '（分页兜底）' : '';
+    logInfo(logger, `资产表已写入 tmp/exports: ${processedPath}（已合并待审核数据，新增审核状态列，删除多余列）${tag}`);
   } catch (error) {
     throw new Error(`资产表写入 tmp/exports 失败: ${error.message}`);
   }
@@ -2117,14 +2364,17 @@ async function exportMsswAssetList(options) {
     downloadDir,
     filePath: processedPath,
     tmpFilePath: processedPath,
-    filename,
+    filename: currentFilename,
     exportFields: exportFieldsResponse.data,
-    exportResponse,
-    downloadResponse: {
-      statusCode: downloaded.statusCode,
-      headers: downloaded.headers
-    }
+    exportResponse: currentExport,
+    downloadResponse
   };
+}
+
+function isTimeoutError(error) {
+  if (!error || typeof error.message !== 'string') return false;
+  const text = error.message.toLowerCase();
+  return text.includes('timeout') || text.includes('超时') || text.includes('etimedout') || text.includes('esockettimedout');
 }
 
 async function fetchMsswCustomerListPage(cookieInfo, msswBaseUrl, { companyId, keyword, offset, limit }) {
@@ -2357,7 +2607,11 @@ async function fetchMsswAssetOverview(options = {}) {
       confirmedIncidentIds: []
     },
     threatActorStats: [],
+    virusAttackAsset: '',
+    virusAttackAssetEmpty: true,
     nonAesCoveredAssetsHideHint: true,
+    nonAesCoveredAssetsAllInstalledHide: true,
+    nonAesCoveredAssetsIps: '',
     unlabeledAssetsHideHint: true
   };
   let caseStudy = buildEmptyCaseStudy();
@@ -2387,8 +2641,11 @@ async function fetchMsswAssetOverview(options = {}) {
           virusIds
         );
         incidentGptStats.virusAttackAsset = assetInfo.virusAttackAsset || '';
+        incidentGptStats.virusAttackAssetEmpty = !incidentGptStats.virusAttackAsset;
         incidentGptStats.nonAesCoveredAssets = assetInfo.nonAesCoveredAssets || [];
+        incidentGptStats.nonAesCoveredAssetsIps = incidentGptStats.nonAesCoveredAssets.filter(Boolean).join('、');
         incidentGptStats.nonAesCoveredAssetsHideHint = incidentGptStats.nonAesCoveredAssets.length === 0;
+        incidentGptStats.nonAesCoveredAssetsAllInstalledHide = incidentGptStats.nonAesCoveredAssets.length > 0;
         incidentGptStats.unlabeledAssets = assetInfo.unlabeledAssets || [];
         incidentGptStats.unlabeledAssetsHideHint = incidentGptStats.unlabeledAssets.length === 0;
         logInfo(logger, `提取事件资产信息完成: 病毒攻击资产=${incidentGptStats.virusAttackAsset}, ` +
@@ -2492,7 +2749,7 @@ async function fetchMsswDeviceList(cookieInfo, msswBaseUrl, companyId, pageSize,
       type: 0,
       pageSize: pageSize || 1000,
       pageNum,
-      devStatus: devStatus || [1, 2, 4]
+      devStatus: devStatus || [1, 2, 3, 4]
     })
   });
   // MSSW 设备列表接口成功时 code 可能是 "Success" 或 0
@@ -2506,7 +2763,7 @@ async function fetchMsswDeviceList(cookieInfo, msswBaseUrl, companyId, pageSize,
 async function fetchMsswThirdPartyDeviceStats(cookieInfo, msswBaseUrl, companyId) {
   const headers = buildMsswExportHeaders(cookieInfo, msswBaseUrl, companyId);
   const url = `https://${normalizeBaseUrl(msswBaseUrl || DEFAULT_MSSW_BASE_URL)}${THIRD_PARTY_DEVICE_STATS_ENDPOINT}`;
-  const response = await requestJson(url, {
+    const response = await requestJson(url, {
     headers,
     body: JSON.stringify({
       name: '',
@@ -2724,6 +2981,146 @@ async function fetchMsswSecurityLogCount(cookieInfo, msswBaseUrl, companyId, opt
   return networkLogTotal + endpointLogTotal;
 }
 
+/**
+ * 计算近 30 天的有效时间范围（接口仅支持近 30 天数据）。
+ * 取用户报告范围与「今天往前推 30 天」的交集。r
+ * @param {string} start - YYYY-MM-DD
+ * @param {string} end   - YYYY-MM-DD
+ * @returns {{from_date:number, to_date:number, effectiveStart:string, effectiveEnd:string}}
+ */
+function resolveSecurityStatsTimeRange(start, end) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // 近 30 天：今天往前推 29 天（含今天，共 30 天）
+  const recentStart = new Date(today);
+  recentStart.setDate(recentStart.getDate() - 29);
+  const recentStartMs = recentStart.getTime();
+  const recentEndMs = today.getTime() + 24 * 60 * 60 * 1000 - 1; // 含今日全天
+
+  const userStartMs = parseLocalDate(start, false) * 1000;
+  const userEndMs = parseLocalDate(end, true) * 1000;
+
+  // 取交集：报告范围 ∩ 近31天
+  const effectiveStartMs = Math.max(userStartMs, recentStartMs);
+  const effectiveEndMs = Math.min(userEndMs, recentEndMs);
+
+  if (effectiveStartMs > effectiveEndMs) {
+    return null; // 无交集
+  }
+
+  return {
+    from_date: Math.floor(effectiveStartMs / 1000),
+    to_date: Math.floor(effectiveEndMs / 1000),
+    effectiveStartMs,
+    effectiveEndMs
+  };
+}
+
+/**
+ * 调用安全体检报告统计接口，获取攻击态势数据。
+ * POST /gateway/log-search-center-service/datalake/v1/personalized_report/security_check_report_stats
+ * @param {object} cookieInfo  - readMsswCookieInfo 返回的 cookie 信息
+ * @param {string} msswBaseUrl - MSSW 基础域名（动态）
+ * @param {string} customerId  - 客户 ID
+ * @param {string} customerName - 客户名（写入 tenant_info.tenant_name）
+ * @param {string} start - YYYY-MM-DD 报告起始时间
+ * @param {string} end   - YYYY-MM-DD 报告结束时间
+ * @returns {Promise<object|null>} 接口响应 data.list[0]，无交集/接口失败时返回 null
+ */
+async function fetchSecurityCheckReportStats(cookieInfo, msswBaseUrl, customerId, customerName, start, end) {
+  const timeRange = resolveSecurityStatsTimeRange(start, end);
+  if (!timeRange) {
+    return null; // 报告范围不在近 30 天内
+  }
+
+  const url = 'https://' + normalizeBaseUrl(msswBaseUrl || DEFAULT_MSSW_BASE_URL) + SECURITY_CHECK_REPORT_STATS_ENDPOINT;
+  const headers = buildMsswLogSearchCountHeaders(cookieInfo, msswBaseUrl);
+  const body = JSON.stringify({
+    condition: {
+      from_date: timeRange.from_date,
+      to_date: timeRange.to_date
+    },
+    top_n: 1,
+    tenant_info: [
+      {
+        tenant_id: String(customerId || ''),
+        tenant_name: String(customerName || '')
+      }
+    ]
+  });
+
+  const response = await requestJson(url, { headers, body });
+  const code = response && response.code;
+  if (code !== 0 && code !== '0') {
+    throw new Error(`攻击态势接口查询失败: ${response.msg || JSON.stringify(response).slice(0, 500)}`);
+  }
+
+  const list = response && response.data && Array.isArray(response.data.list) ? response.data.list : [];
+  return list.length ? list[0] : null;
+}
+
+/**
+ * 格式化攻击态势的占比百分数。
+ * 规则：
+ *   - totalAttack <= 0 时返回 '0'（话术渲染为「0%」）
+ *   - 能除尽（整数 / 一位小数 / 两位小数）则按实际位数返回，去掉末尾多余的 0
+ *   - 除不尽则四舍五入保留最多两位小数
+ * @param {number} nightAttack
+ * @param {number} totalAttack
+ * @returns {string} 百分数的数字部分（不含 %）
+ */
+function formatAttackRatio(nightAttack, totalAttack) {
+  if (!totalAttack || totalAttack <= 0) {
+    return '0';
+  }
+  const ratio = (Number(nightAttack || 0) / totalAttack) * 100;
+  // 先按两位小数四舍五入，再去掉末尾多余的 0 和小数点
+  return String(Math.round(ratio * 100) / 100);
+}
+
+/**
+ * 计算攻击态势总览展示数据。
+ * - daily_avg = total_attack_count / count_list.length（总次数/天数，四舍五入；dayCount=0 时兜底为 0）
+ * - night_ratio = night_attack_count / total_attack_count（百分数：能除尽则按实际位数显示，除不尽四舍五入保留最多两位小数；
+ *   去掉末尾多余的 0，整数结果不带小数点；totalAttack=0 时返回 '0'）
+ * - trend_dates = report_date 仅取 MM-DD
+ * - trend_values = attack_count
+ * @param {object} stats - 接口返回的 list[0]
+ * @returns {object} attackOverview 字段
+ */
+function calculateAttackOverview(stats) {
+  if (!stats || typeof stats !== 'object') {
+    return null;
+  }
+
+  const totalAttack = Number(stats.total_attack_count || 0);
+  const nightAttack = Number(stats.night_attack_count || 0);
+  const workdayAttack = Math.max(totalAttack - nightAttack, 0);
+  const countList = Array.isArray(stats.count_list) ? stats.count_list : [];
+  const dayCount = countList.length;
+  const dailyAvg = dayCount > 0 ? Math.round(totalAttack / dayCount) : 0;
+  const nightRatio = formatAttackRatio(nightAttack, totalAttack);
+
+  const trendDates = countList.map((item) => {
+    const reportDate = String(item && item.report_date || '');
+    // YYYY-MM-DD → MM-DD
+    return reportDate.length >= 10 ? reportDate.slice(5, 10) : reportDate;
+  });
+  const trendValues = countList.map((item) => Number(item && item.attack_count || 0));
+
+  return {
+    total_attack_count: totalAttack,
+    night_attack_count: nightAttack,
+    workday_attack_count: workdayAttack,
+    daily_avg: dailyAvg,
+    night_ratio: nightRatio,
+    trend_dates: trendDates,
+    trend_values: trendValues,
+    error: stats.error || ''
+  };
+}
+
 module.exports = {
   DEFAULT_MSSW_BASE_URL,
   DEFAULT_SOAR_BASE_URL,
@@ -2757,11 +3154,16 @@ module.exports = {
   normalizeAssetReadyToOutboundResponse,
   fetchMsswAssetOverview,
   fetchMsswAlertTableCount,
+  fetchContainedAlertCount,
   fetchMsswSecurityLogCount,
   MSSW_LOG_SEARCH_COUNT_ENDPOINT,
   buildMsswLogSearchCountRequestBody,
   buildMsswLogSearchCountHeaders,
   fetchMsswLogCountByTable,
+  SECURITY_CHECK_REPORT_STATS_ENDPOINT,
+  fetchSecurityCheckReportStats,
+  resolveSecurityStatsTimeRange,
+  calculateAttackOverview,
   formatTimestampToDateTime,
   THREAT_ACTOR_NAMES,
   matchThreatActor,

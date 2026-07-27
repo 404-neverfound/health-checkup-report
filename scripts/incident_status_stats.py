@@ -55,7 +55,6 @@ def main():
     severe = 0
     high = 0
     closed = 0
-    contained = 0
     processing = 0
     unique_ips = set()
 
@@ -75,9 +74,6 @@ def main():
             status = normalize(row[status_col])
             if status == "处置完成":
                 closed += 1
-                contained += 1
-            elif status == "已遏制":
-                contained += 1
             elif status == "处置中":
                 processing += 1
 
@@ -91,7 +87,6 @@ def main():
         "severeEvents": severe,
         "highEvents": high,
         "closedEvents": closed,
-        "containedEvents": contained,
         "processingEvents": processing,
         "closeRate": close_rate,
         "uniqueAssetCount": len(unique_ips)
