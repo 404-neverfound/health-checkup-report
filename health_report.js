@@ -938,7 +938,7 @@ async function resolveEffectiveTimeRange({ options, customerId, msswCookie, repo
       );
       logger(`服务时间范围: ${serviceTimeRange.start} ~ ${serviceTimeRange.end}`);
     } catch (error) {
-      logger(`获取服务时间范围失败: ${error.message}`);
+      throw new Error(`该客户无有效 MSSW 服务授权，无法生成报告（${error.message}）`);
     }
   }
 
@@ -947,17 +947,28 @@ async function resolveEffectiveTimeRange({ options, customerId, msswCookie, repo
     let effectiveEnd = String(options.end).trim();
 
     if (serviceTimeRange) {
-      // 起始时间早于服务开始时间 → 取服务开始时间
       const userStart = parseLocalDate(effectiveStart, false);
       const serviceStart = parseLocalDate(serviceTimeRange.start, false);
+      const userEnd = parseLocalDate(effectiveEnd, true);
+      const serviceEnd = parseLocalDate(serviceTimeRange.end, true);
+
+      // 用户范围与服务范围完全没有交集
+      if (userStart !== null && userEnd !== null && serviceStart !== null && serviceEnd !== null) {
+        if (userEnd < serviceStart || userStart > serviceEnd) {
+          throw new Error(
+            `您指定的时间范围 ${String(options.start).trim()} ~ ${String(options.end).trim()} 与服务覆盖范围 ` +
+            `${serviceTimeRange.start} ~ ${serviceTimeRange.end} 没有交集，请调整后重试`
+          );
+        }
+      }
+
+      // 起始时间早于服务开始时间 → 取服务开始时间
       if (userStart !== null && serviceStart !== null && userStart < serviceStart) {
         effectiveStart = serviceTimeRange.start;
         logger(`用户起始时间 ${options.start} 早于服务开始时间 ${serviceTimeRange.start}，已自动调整`);
       }
 
       // 结束时间晚于服务结束时间 → 取服务结束时间
-      const userEnd = parseLocalDate(effectiveEnd, true);
-      const serviceEnd = parseLocalDate(serviceTimeRange.end, true);
       if (userEnd !== null && serviceEnd !== null && userEnd > serviceEnd) {
         effectiveEnd = serviceTimeRange.end;
         logger(`用户结束时间 ${options.end} 晚于服务结束时间 ${serviceTimeRange.end}，已自动调整`);
