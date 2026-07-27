@@ -1118,20 +1118,55 @@ async function fetchIncidentAlertIds(cookieInfo, msswBaseUrl, companyId, inciden
 async function queryCaseStudyAlertRow(msswCookieInfo, msswBaseUrl, companyId, range, alertIds, stageId, techniqueId) {
   const headers = buildMsswTableQueryHeaders(msswCookieInfo, msswBaseUrl, companyId);
   const url = `https://${normalizeBaseUrl(msswBaseUrl || DEFAULT_MSSW_BASE_URL)}${ALERT_QUERY_ENDPOINT}`;
+  const requestBody = buildCaseStudyAlertQueryRequestBody({
+    begin: range.begin,
+    end: range.end,
+    alertIds,
+    stageId,
+    techniqueId
+  });
+
+  console.log('[DEBUG] 典型案例告警详情请求:', JSON.stringify({
+    url,
+    companyId: String(companyId || ''),
+    alertIds,
+    stageId,
+    techniqueId,
+    begin: range.begin,
+    end: range.end,
+    mappedSpl: requestBody.spl && requestBody.spl.mappedSpl,
+    mappedInputSpl: requestBody.spl && requestBody.spl.extensionParams && requestBody.spl.extensionParams.mappedInputSpl,
+    viewInstanceId: requestBody.viewInstanceId
+  }, null, 2));
+
   const response = await requestJson(url, {
     headers,
-    body: JSON.stringify(buildCaseStudyAlertQueryRequestBody({
-      begin: range.begin,
-      end: range.end,
-      alertIds,
-      stageId,
-      techniqueId
-    }))
+    body: JSON.stringify(requestBody)
   });
 
   assertXdrApiSuccess(response, '典型案例攻击侧查询');
   const data = response && response.data && typeof response.data === 'object' ? response.data : {};
   const list = Array.isArray(data.data) ? data.data : [];
+  const firstRow = list[0] || null;
+  console.log('[DEBUG] 典型案例告警详情响应摘要:', JSON.stringify({
+    code: response && response.code,
+    strCode: response && response.strCode,
+    message: response && response.message,
+    topLevelKeys: response && typeof response === 'object' ? Object.keys(response) : [],
+    dataKeys: Object.keys(data),
+    total: data.total,
+    pageNum: data.pageNum,
+    pageSize: data.pageSize,
+    listLength: list.length,
+    firstRowKeys: firstRow && typeof firstRow === 'object' ? Object.keys(firstRow) : [],
+    firstRow: firstRow ? {
+      uuId: extractCellValue(firstRow.uuId),
+      lastTime: extractCellValue(firstRow.lastTime),
+      hostIp: extractCellValue(firstRow.hostIp),
+      attckTechnique: firstRow.attckTechnique || null,
+      attckSubTechnique: firstRow.attckSubTechnique || null
+    } : null
+  }, null, 2));
   return list[0] || null;
 }
 
@@ -1151,11 +1186,12 @@ async function queryCaseStudyIncidentTimeline(cookieInfo, msswBaseUrl, companyId
   const data = response && response.data && typeof response.data === 'object' ? response.data : {};
   const list = Array.isArray(data.data) ? data.data : [];
   const row = list[0] || null;
-  console.log('[DEBUG] queryCaseStudyIncidentTimeline 原始响应 data:', JSON.stringify(data, null, 2));
-  console.log('[DEBUG] queryCaseStudyIncidentTimeline 取到的 row:', JSON.stringify(row, null, 2));
-  if (row && row.logTraceInfo) {
-    console.log('[DEBUG] queryCaseStudyIncidentTimeline row.logTraceInfo:', JSON.stringify(row.logTraceInfo, null, 2));
-  }
+  console.log('[DEBUG] 典型案例防守侧响应摘要:', JSON.stringify({
+    total: data.total,
+    listLength: list.length,
+    rowKeys: row && typeof row === 'object' ? Object.keys(row) : [],
+    hasLogTraceInfo: Boolean(row && row.logTraceInfo)
+  }, null, 2));
   return row;
 }
 
@@ -1184,27 +1220,21 @@ function extractAttckTechniqueHits(response) {
 }
 
 function buildDefenseTimelineFromIncidentRow(row) {
-  console.log('[DEBUG] buildDefenseTimelineFromIncidentRow 入参 row:', JSON.stringify(row, null, 2));
   if (!row || typeof row !== 'object') {
-    console.log('[DEBUG] buildDefenseTimelineFromIncidentRow row为空/非对象，返回[]');
     return [];
   }
   const logTraceInfo = row.logTraceInfo && typeof row.logTraceInfo === 'object' ? row.logTraceInfo : {};
-  console.log('[DEBUG] buildDefenseTimelineFromIncidentRow logTraceInfo:', JSON.stringify(logTraceInfo, null, 2));
   const renderValue = Array.isArray(logTraceInfo.renderValue) ? logTraceInfo.renderValue : [];
-  console.log('[DEBUG] buildDefenseTimelineFromIncidentRow renderValue 原始数组:', JSON.stringify(renderValue, null, 2));
   const result = renderValue
-    .map((item, idx) => {
+    .map((item) => {
       const parsed = {
         timestamp: Number(item && item.value || 0),
         label: String(item && item.label || '').trim()
       };
-      console.log(`[DEBUG] buildDefenseTimelineFromIncidentRow item[${idx}]: raw=`, JSON.stringify(item), 'parsed=', JSON.stringify(parsed));
       return parsed;
     })
     .filter((item) => Number.isFinite(item.timestamp) && item.timestamp > 0 && item.label)
     .reverse();
-  console.log('[DEBUG] buildDefenseTimelineFromIncidentRow 最终结果:', JSON.stringify(result, null, 2));
   return result;
 }
 
@@ -1319,10 +1349,20 @@ async function fetchIncidentCaseStudy(options = {}) {
 
     const hostIp = String(extractCellValue(alertRow.hostIp) || '').trim();
     const dstIpValues = extractArrayCellValues(alertRow.dstIp);
+    const alertTimestamp = Number(extractCellValue(alertRow.lastTime) || 0);
+    console.log('[DEBUG] 典型案例攻击侧记录已取到:', JSON.stringify({
+      technique: `${hit.stageId}.${hit.techniqueId}`,
+      alertIdCount: alertIds.length,
+      alertRowKeys: Object.keys(alertRow),
+      timestamp: alertTimestamp,
+      timestampValid: Number.isFinite(alertTimestamp) && alertTimestamp > 0,
+      hostIp,
+      dstIpCount: dstIpValues.length
+    }, null, 2));
     const voiceMode = determineVoiceMode(hostIp, dstIpValues);
 
     attackTimeline.push({
-      timestamp: Number(extractCellValue(alertRow.lastTime) || 0),
+      timestamp: alertTimestamp,
       stageId: hit.stageId,
       stageName: hit.stageName,
       techniqueId: hit.techniqueId,
@@ -1354,7 +1394,6 @@ async function fetchIncidentCaseStudy(options = {}) {
     );
     result.defenseTimeline = buildDefenseTimelineFromIncidentRow(incidentRow);
     logInfo(options.logger, `[典型案例] 防守时间线: ${result.defenseTimeline.length} 条, incidentRow=${incidentRow ? '有' : '无'}`);
-    console.log('[DEBUG] fetchIncidentCaseStudy defenseTimeline 最终结果:', JSON.stringify(result.defenseTimeline, null, 2));
   } catch (error) {
     logInfo(options.logger, `[典型案例] 防守侧时间线查询失败: ${error.message}`);
     result.defenseTimeline = [];
