@@ -3003,11 +3003,13 @@ function resolveSecurityStatsTimeRange(start, end) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // 近 30 天：今天往前推 29 天（含今天，共 30 天）
-  const recentStart = new Date(today);
+  // 近 30 天：昨天往前推 29 天（含昨天，共 30 天）
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const recentStart = new Date(yesterday);
   recentStart.setDate(recentStart.getDate() - 29);
   const recentStartMs = recentStart.getTime();
-  const recentEndMs = today.getTime() + 24 * 60 * 60 * 1000 - 1; // 含今日全天
+  const recentEndMs = yesterday.getTime() + 24 * 60 * 60 * 1000 - 1; // 含昨日全天
 
   const userStartMs = parseLocalDate(start, false) * 1000;
   const userEndMs = parseLocalDate(end, true) * 1000;
