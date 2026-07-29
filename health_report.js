@@ -260,13 +260,24 @@ async function main() {
 
       // 通过 MSSW 接口查询设备分类数量
       try {
-        logger('正在通过 MSSW 查询设备分类数量...');
-        const deviceCounts = await collectMsswDeviceCategoryCounts(
-          loadedMsswCookie,
-          options['mssw-base-url'],
-          customerId,
-          logger
-        );
+        // logger('正在通过 MSSW 查询设备分类数量...');
+        // const deviceCounts = await collectMsswDeviceCategoryCounts(
+        //   loadedMsswCookie,
+        //   options['mssw-base-url'],
+        //   customerId,
+        //   logger
+        // );
+        // TODO: 临时 mock 返回，af 和 sip 固定为 0，其他设备数量固定为 1
+        const deviceCounts = {
+          devices: 4,
+          sangfor: 3,
+          af: 0,
+          aes: 1,
+          sip: 0,
+          sta: 1,
+          other_sf: 1,
+          third: 1
+        };
         reportData.riskDetails = Object.assign(reportData.riskDetails || {}, deviceCounts);
         reportData.riskOverview = Object.assign(reportData.riskOverview || {}, {
           devices: deviceCounts.devices
