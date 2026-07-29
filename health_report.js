@@ -321,17 +321,24 @@ async function main() {
     }
 
     logger('开始准备威胁预防所需表格...');
-    preventionTables = await collectPreventionTableExports({
-      customer: options.customer,
-      start: effectiveTimeRange.start,
-      end: effectiveTimeRange.end,
-      soarCookiePath: options['cookie-path'],
-      msswCookiePath: options['mssw-cookie-path'],
-      msswBaseUrl: options['mssw-base-url'],
-      soarBaseUrl: options['soar-base-url'],
-      outputDir: getTmpExportDir(),
-      logger
-    });
+    preventionTables = options['skip-prevention']
+      ? (logger('威胁预防表格使用本地文件（skip-prevention 模式）'),
+        {
+          weakpwd: { filePath: path.join(__dirname, '弱口令清单.xlsx'), source: 'local' },
+          vuln:    { filePath: path.join(__dirname, '漏洞清单.xlsx'),    source: 'local' },
+          exposure:{ filePath: path.join(__dirname, '暴露面清单.xlsx'), source: 'local' },
+        })
+      : await collectPreventionTableExports({
+          customer: options.customer,
+          start: effectiveTimeRange.start,
+          end: effectiveTimeRange.end,
+          soarCookiePath: options['cookie-path'],
+          msswCookiePath: options['mssw-cookie-path'],
+          msswBaseUrl: options['mssw-base-url'],
+          soarBaseUrl: options['soar-base-url'],
+          outputDir: getTmpExportDir(),
+          logger
+        });
     logger(`威胁预防表格已就绪: weakpwd=${preventionTables.weakpwd.filePath}, vuln=${preventionTables.vuln.filePath}, exposure=${preventionTables.exposure.filePath}`);
 
     const preventionData = await calculatePreventionData({
@@ -533,9 +540,17 @@ async function main() {
     const cs = (reportData.riskDetails || {}).caseStudy || {};
     const attack = Array.isArray(cs.attackTimeline) ? cs.attackTimeline.length : 0;
     const defense = Array.isArray(cs.defenseTimeline) ? cs.defenseTimeline.length : 0;
+    const defenseItems = Array.isArray(cs.defenseTimeline) ? cs.defenseTimeline : [];
     const noCase = attack + defense === 0;
     reportData.riskDetails.caseStudySectionHide = noCase;
     logger(`4.1.4 典型案例章节隐藏标记: ${noCase} (attack=${attack}, defense=${defense})`);
+    if (defenseItems.length > 0) {
+      logger(`4.1.4 防守时间线详情: ${JSON.stringify(defenseItems.map((item) => ({
+        timestamp: item.timestamp,
+        time: new Date(item.timestamp).toISOString(),
+        label: item.label
+      })))}`);
+    }
   }
 
   const reportDataJsonPath = options['output-json'] || path.join(outputDir, 'report-data.json');
@@ -631,6 +646,7 @@ Options:
   --output-dir <path>            Output directory
   --af <true|false>              是否开通防火墙云情报网关订阅（必填，由 skill 层反问后传入）
   --sip <true|false>             是否开通SIP云端情报检测（必填，由 skill 层反问后传入）
+  --skip-prevention              使用项目根目录下的本地清单（弱口令清单.xlsx / 漏洞清单.xlsx / 暴露面清单.xlsx），跳过接口导出
 `);
 }
 
@@ -905,6 +921,13 @@ function computeDaySpan(startStr, endStr) {
   const endDate = new Date(+endMatch[1], +endMatch[2] - 1, +endMatch[3]);
   const msPerDay = 24 * 60 * 60 * 1000;
   return Math.round((endDate.getTime() - startDate.getTime()) / msPerDay) + 1;
+}
+
+function formatDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function subtractDays(dateStr, days) {

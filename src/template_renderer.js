@@ -165,7 +165,7 @@ function patchKnownText(html, data) {
   html = html
     .replace(/<meta name="report-data-mode" content="[^"]*">/, '<meta name="report-data-mode" content="generated">')
     .replace(/<title>.*?<\/title>/, `<title>${escapeHtml(title)} - ${escapeHtml(customer)}</title>`)
-    .replace(/<h1>首次安全体检报告<\/h1>/, `<h1>${escapeHtml(title)}</h1>`)
+    .replace(/<h1>安全体检报告<\/h1>/, `<h1>${escapeHtml(title)}</h1>`)
     .replace(/示例科技有限公司 · 2026-01-01 ~ 2026-03-31/g, `${escapeHtml(customer)} · ${escapeHtml(period)}`)
     .replace(/「示例科技有限公司」/g, `「${escapeHtml(customer)}」`)
     .replace(/示例科技有限公司/g, escapeHtml(customer))
@@ -494,7 +494,7 @@ function renderVulnExploitRows(rows) {
     '<tr>',
     `<td><span class="sr-event-name">${escapeHtml(row.eventName || '')}</span></td>`,
     `<td>${escapeHtml(row.affectedAsset || '')}</td>`,
-    `<td>${escapeHtml(row.lastOccurredAt || '')}</td>`,
+    `<td class="sr-no-wrap">${escapeHtml(row.lastOccurredAt || '')}</td>`,
     `<td>${renderStatusTag(row.disposalStatus)}</td>`,
     '</tr>'
   ].join('')).join('');
@@ -509,7 +509,7 @@ function renderVirusRows(rows) {
     '<tr>',
     `<td>${escapeHtml(row.affectedAsset || '')}</td>`,
     `<td><span class="sr-event-name">${formatMultiValueCell(row.md5 || '')}</span></td>`,
-    `<td>${escapeHtml(row.lastOccurredAt || '')}</td>`,
+    `<td class="sr-no-wrap">${escapeHtml(row.lastOccurredAt || '')}</td>`,
     `<td>${renderStatusTag(row.disposalStatus)}</td>`,
     '</tr>'
   ].join('')).join('');
@@ -524,7 +524,7 @@ function renderC2Rows(rows) {
     '<tr>',
     `<td>${escapeHtml(row.affectedAsset || '')}</td>`,
     `<td><span class="sr-event-name">${formatMultiValueCell(row.ioc || '')}</span></td>`,
-    `<td>${escapeHtml(row.lastOccurredAt || '')}</td>`,
+    `<td class="sr-no-wrap">${escapeHtml(row.lastOccurredAt || '')}</td>`,
     `<td>${renderStatusTag(row.disposalStatus)}</td>`,
     '</tr>'
   ].join('')).join('');
@@ -693,7 +693,7 @@ function renderDefenseTimelineColumn(item) {
     '<div class="tm-right">',
     '<div class="tm-card def">',
     `<div class="tm-tag">${label}</div>`,
-    time ? `<div class="tm-time">${time}</div>` : '',
+    time ? `<div class="tm-time">${time}</div>` : '<div class="tm-time">暂无时间</div>',
     '<span class="tm-arrow"></span>',
     '</div>',
     '</div>'
