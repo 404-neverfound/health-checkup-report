@@ -693,7 +693,7 @@ function renderDefenseTimelineColumn(item) {
     '<div class="tm-right">',
     '<div class="tm-card def">',
     `<div class="tm-tag">${label}</div>`,
-    time ? `<div class="tm-time">${time}</div>` : '',
+    time ? `<div class="tm-time">${time}</div>` : '<div class="tm-time">暂无时间</div>',
     '<span class="tm-arrow"></span>',
     '</div>',
     '</div>'

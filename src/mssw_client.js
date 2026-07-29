@@ -1228,10 +1228,34 @@ function extractAttckTechniqueHits(response) {
   return hits;
 }
 
-function buildDefenseTimelineFromIncidentRow(row) {
+// 防守时间线固定五个节点的标签和对应的时间字段组
+const DEFENSE_TIMELINE_NODES = [
+  {
+    label: '【日志】接收到所有相关日志',
+    timeLabels: ['数据湖标准化时间', '数据湖接收时间', '组件日志上报时间', '组件日志检测时间']
+  },
+  {
+    label: '【告警】AI将上述日志提取出来生成关键告警',
+    timeLabels: ['N侧引擎接收时间', '首次安全告警生成时间', 'XDR平台数据采集时间', 'XDR平台数据上报时间', '分布式数据云上安全代理转发时间', '安全告警解读时间']
+  },
+  {
+    label: '【事件】AI进行关键告警分析生成事件',
+    timeLabels: ['云端AI安服联动时间', 'NAE关联分析引擎接收时间', '首次安全事件生成时间', '安全事件接收时间', '安全事件入库时间']
+  },
+  {
+    label: '【遏制】联动封锁威胁实体'
+    // 时间取事件表的"完成时间"
+  },
+  {
+    label: '【闭环】上机排查，根除病毒，下发外联loC'
+    // 时间取事件表的"完成时间"
+  }
+];
+
+function buildDefenseTimelineFromIncidentRow(row, completionTime) {
   if (!row || typeof row !== 'object') {
-    console.log('[DEBUG] 防守时间线构建: row 为空或非对象，返回空数组');
-    return [];
+    console.log('[DEBUG] 防守时间线构建: row 为空或非对象，返回固定五节点占位');
+    return buildFixedDefenseNodes([], '');
   }
   const logTraceInfo = row.logTraceInfo && typeof row.logTraceInfo === 'object' ? row.logTraceInfo : {};
   const renderValue = Array.isArray(logTraceInfo.renderValue) ? logTraceInfo.renderValue : [];
@@ -1241,29 +1265,78 @@ function buildDefenseTimelineFromIncidentRow(row) {
       value: item && item.value,
       label: item && item.label,
       valueType: typeof (item && item.value),
-      valueMs: item && item.value ? new Date(item.value).toISOString() : null
+      valueMs: item && item.value ? new Date(item.value * 1000).toISOString() : null
     }))
   }, null, 2));
-  const result = renderValue
-    .map((item) => {
-      const parsed = {
-        timestamp: Number(item && item.value || 0),
-        label: String(item && item.label || '').trim()
-      };
-      return parsed;
-    })
-    .filter((item) => Number.isFinite(item.timestamp) && item.timestamp > 0 && item.label)
-    .reverse();
-  console.log('[DEBUG] 防守时间线构建: 解析结果:', JSON.stringify({
-    totalRaw: renderValue.length,
-    totalValid: result.length,
-    items: result.map((item) => ({
+
+  // 将 renderValue 转换为 label → maxTimestamp 的映射（同一label可能有多个值，取最晚）
+  const labelTimeMap = new Map();
+  for (const item of renderValue) {
+    const ts = Number(item && item.value || 0);
+    const label = String(item && item.label || '').trim();
+    if (!Number.isFinite(ts) || ts <= 0 || !label) continue;
+    const existing = labelTimeMap.get(label);
+    if (existing === undefined || ts > existing) {
+      labelTimeMap.set(label, ts);
+    }
+  }
+
+  console.log('[DEBUG] 防守时间线构建: label→time 映射:', JSON.stringify(
+    Array.from(labelTimeMap.entries()).map(([label, ts]) => ({
+      label,
+      timestamp: ts,
+      time: new Date(ts * 1000).toISOString()
+    }))
+  , null, 2));
+
+  return buildFixedDefenseNodes(labelTimeMap, completionTime);
+}
+
+/**
+ * 从 label→time 映射中查找匹配的时间。
+ * 对 timeLabels 中的每个标签尝试匹配（支持精确匹配和包含匹配），取所有匹配中最大的时间戳。
+ */
+function resolveMaxTimeFromLabels(labelTimeMap, timeLabels) {
+  let maxTime = null;
+  for (const targetLabel of timeLabels) {
+    for (const [mapLabel, ts] of labelTimeMap) {
+      // 精确匹配或互相包含
+      if (mapLabel === targetLabel || mapLabel.includes(targetLabel) || targetLabel.includes(mapLabel)) {
+        if (maxTime === null || ts > maxTime) {
+          maxTime = ts;
+        }
+      }
+    }
+  }
+  return maxTime;
+}
+
+function buildFixedDefenseNodes(labelTimeMap, completionTime) {
+  const nodes = [];
+  for (const nodeDef of DEFENSE_TIMELINE_NODES) {
+    let timestamp = null;
+    if (nodeDef.timeLabels) {
+      // 前三个节点：从接口返回中取相关时间标签的最晚时间
+      timestamp = resolveMaxTimeFromLabels(labelTimeMap, nodeDef.timeLabels);
+    } else {
+      // 第四、五个节点：取事件表的完成时间
+      timestamp = completionTime;
+    }
+    nodes.push({
+      label: nodeDef.label,
+      timestamp: timestamp
+    });
+  }
+
+  console.log('[DEBUG] 防守时间线构建: 固定五节点结果:', JSON.stringify(
+    nodes.map((item) => ({
+      label: item.label,
       timestamp: item.timestamp,
-      time: new Date(item.timestamp).toISOString(),
-      label: item.label
+      time: item.timestamp && item.timestamp > 0 ? new Date(item.timestamp * 1000).toISOString() : '暂无时间'
     }))
-  }, null, 2));
-  return result;
+  , null, 2));
+
+  return nodes;
 }
 
 async function fetchIncidentCaseStudy(options = {}) {
@@ -1420,17 +1493,26 @@ async function fetchIncidentCaseStudy(options = {}) {
       defenseIncidentQueryRange,
       selected.incidentId
     );
-    result.defenseTimeline = buildDefenseTimelineFromIncidentRow(incidentRow);
+    // 从事件表 Excel 读取"完成时间"
+    let completionTime = null;
+    try {
+      completionTime = await readIncidentCompletionTime(options.incidentFilePath, selected.incidentId);
+      logInfo(options.logger, `[典型案例] 完成时间: ${completionTime || '暂无时间'}`);
+    } catch (completionErr) {
+      logInfo(options.logger, `[典型案例] 读取完成时间失败: ${completionErr.message}`);
+    }
+    result.defenseTimeline = buildDefenseTimelineFromIncidentRow(incidentRow, completionTime);
     logInfo(options.logger, `[典型案例] 防守时间线: ${result.defenseTimeline.length} 条, incidentRow=${incidentRow ? '有' : '无'}`);
     if (result.defenseTimeline.length > 0) {
       logInfo(options.logger, `[典型案例] 防守时间线详情: ${JSON.stringify(result.defenseTimeline.map((item) => ({
-        time: new Date(item.timestamp).toISOString(),
+        time: item.timestamp && item.timestamp > 0 ? new Date(item.timestamp * 1000).toISOString() : '暂无时间',
         label: item.label
       })))}`);
     }
   } catch (error) {
     logInfo(options.logger, `[典型案例] 防守侧时间线查询失败: ${error.message}`);
-    result.defenseTimeline = [];
+    // Even on failure, return 5 fixed nodes (all with 暂无时间)
+    result.defenseTimeline = buildFixedDefenseNodes(new Map(), null);
   }
 
   return result;
@@ -1764,6 +1846,54 @@ function resolveIncidentTimeRange(options = {}) {
   }
 
   return { begin, end };
+}
+
+/**
+ * Read "完成时间" for a given incident from the incident Excel table via Python helper.
+ * Returns a unix timestamp (seconds) if found, or null.
+ */
+function readIncidentCompletionTime(excelPath, incidentId) {
+  return new Promise((resolve, reject) => {
+    const scriptPath = path.join(__dirname, '..', 'scripts', 'read_incident_completion_time.py');
+    execFile('python3', [scriptPath, encodePath(excelPath), incidentId], {
+      encoding: 'utf8',
+      timeout: 30000,
+      env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8' })
+    }, (error, stdout, stderr) => {
+      if (error) {
+        // Fallback: try python instead of python3
+        execFile('python', [scriptPath, encodePath(excelPath), incidentId], {
+          encoding: 'utf8',
+          timeout: 30000,
+          env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8' })
+        }, (err2, stdout2, stderr2) => {
+          if (err2) {
+            reject(new Error(`读取完成时间失败: ${stderr || error.message}`));
+            return;
+          }
+          resolve(parseCompletionTimeResult(stdout2));
+        });
+        return;
+      }
+      resolve(parseCompletionTimeResult(stdout));
+    });
+  });
+}
+
+function parseCompletionTimeResult(stdout) {
+  try {
+    const parsed = JSON.parse(stdout);
+    const timeStr = parsed.completionTime;
+    if (!timeStr) return null;
+    // Try to parse as datetime string and convert to unix timestamp (seconds)
+    const dt = new Date(timeStr);
+    if (isNaN(dt.getTime())) {
+      return null;
+    }
+    return Math.floor(dt.getTime() / 1000);
+  } catch (e) {
+    return null;
+  }
 }
 
 function sleep(ms) {
