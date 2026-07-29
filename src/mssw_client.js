@@ -1186,11 +1186,20 @@ async function queryCaseStudyIncidentTimeline(cookieInfo, msswBaseUrl, companyId
   const data = response && response.data && typeof response.data === 'object' ? response.data : {};
   const list = Array.isArray(data.data) ? data.data : [];
   const row = list[0] || null;
+  const logTraceInfo = row && row.logTraceInfo && typeof row.logTraceInfo === 'object' ? row.logTraceInfo : null;
+  const renderValue = logTraceInfo && Array.isArray(logTraceInfo.renderValue) ? logTraceInfo.renderValue : [];
   console.log('[DEBUG] 典型案例防守侧响应摘要:', JSON.stringify({
     total: data.total,
     listLength: list.length,
     rowKeys: row && typeof row === 'object' ? Object.keys(row) : [],
-    hasLogTraceInfo: Boolean(row && row.logTraceInfo)
+    hasLogTraceInfo: Boolean(row && row.logTraceInfo),
+    logTraceInfoKeys: logTraceInfo ? Object.keys(logTraceInfo) : [],
+    renderValueCount: renderValue.length,
+    renderValuePreview: renderValue.slice(0, 5).map((item) => ({
+      value: item && item.value,
+      label: item && item.label,
+      time: item && item.value ? new Date(item.value).toISOString() : null
+    }))
   }, null, 2));
   return row;
 }
@@ -1221,10 +1230,20 @@ function extractAttckTechniqueHits(response) {
 
 function buildDefenseTimelineFromIncidentRow(row) {
   if (!row || typeof row !== 'object') {
+    console.log('[DEBUG] 防守时间线构建: row 为空或非对象，返回空数组');
     return [];
   }
   const logTraceInfo = row.logTraceInfo && typeof row.logTraceInfo === 'object' ? row.logTraceInfo : {};
   const renderValue = Array.isArray(logTraceInfo.renderValue) ? logTraceInfo.renderValue : [];
+  console.log('[DEBUG] 防守时间线构建: renderValue 原始数据:', JSON.stringify({
+    renderValueCount: renderValue.length,
+    renderValue: renderValue.map((item) => ({
+      value: item && item.value,
+      label: item && item.label,
+      valueType: typeof (item && item.value),
+      valueMs: item && item.value ? new Date(item.value).toISOString() : null
+    }))
+  }, null, 2));
   const result = renderValue
     .map((item) => {
       const parsed = {
@@ -1235,6 +1254,15 @@ function buildDefenseTimelineFromIncidentRow(row) {
     })
     .filter((item) => Number.isFinite(item.timestamp) && item.timestamp > 0 && item.label)
     .reverse();
+  console.log('[DEBUG] 防守时间线构建: 解析结果:', JSON.stringify({
+    totalRaw: renderValue.length,
+    totalValid: result.length,
+    items: result.map((item) => ({
+      timestamp: item.timestamp,
+      time: new Date(item.timestamp).toISOString(),
+      label: item.label
+    }))
+  }, null, 2));
   return result;
 }
 
@@ -1394,6 +1422,12 @@ async function fetchIncidentCaseStudy(options = {}) {
     );
     result.defenseTimeline = buildDefenseTimelineFromIncidentRow(incidentRow);
     logInfo(options.logger, `[典型案例] 防守时间线: ${result.defenseTimeline.length} 条, incidentRow=${incidentRow ? '有' : '无'}`);
+    if (result.defenseTimeline.length > 0) {
+      logInfo(options.logger, `[典型案例] 防守时间线详情: ${JSON.stringify(result.defenseTimeline.map((item) => ({
+        time: new Date(item.timestamp).toISOString(),
+        label: item.label
+      })))}`);
+    }
   } catch (error) {
     logInfo(options.logger, `[典型案例] 防守侧时间线查询失败: ${error.message}`);
     result.defenseTimeline = [];

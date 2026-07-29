@@ -260,13 +260,24 @@ async function main() {
 
       // 通过 MSSW 接口查询设备分类数量
       try {
-        logger('正在通过 MSSW 查询设备分类数量...');
-        const deviceCounts = await collectMsswDeviceCategoryCounts(
-          loadedMsswCookie,
-          options['mssw-base-url'],
-          customerId,
-          logger
-        );
+        // logger('正在通过 MSSW 查询设备分类数量...');
+        // const deviceCounts = await collectMsswDeviceCategoryCounts(
+        //   loadedMsswCookie,
+        //   options['mssw-base-url'],
+        //   customerId,
+        //   logger
+        // );
+        // TODO: 临时 mock 返回，af 和 sip 固定为 0，其他设备数量固定为 1
+        const deviceCounts = {
+          devices: 4,
+          sangfor: 3,
+          af: 0,
+          aes: 1,
+          sip: 0,
+          sta: 1,
+          other_sf: 1,
+          third: 1
+        };
         reportData.riskDetails = Object.assign(reportData.riskDetails || {}, deviceCounts);
         reportData.riskOverview = Object.assign(reportData.riskOverview || {}, {
           devices: deviceCounts.devices
@@ -533,9 +544,17 @@ async function main() {
     const cs = (reportData.riskDetails || {}).caseStudy || {};
     const attack = Array.isArray(cs.attackTimeline) ? cs.attackTimeline.length : 0;
     const defense = Array.isArray(cs.defenseTimeline) ? cs.defenseTimeline.length : 0;
+    const defenseItems = Array.isArray(cs.defenseTimeline) ? cs.defenseTimeline : [];
     const noCase = attack + defense === 0;
     reportData.riskDetails.caseStudySectionHide = noCase;
     logger(`4.1.4 典型案例章节隐藏标记: ${noCase} (attack=${attack}, defense=${defense})`);
+    if (defenseItems.length > 0) {
+      logger(`4.1.4 防守时间线详情: ${JSON.stringify(defenseItems.map((item) => ({
+        timestamp: item.timestamp,
+        time: new Date(item.timestamp).toISOString(),
+        label: item.label
+      })))}`);
+    }
   }
 
   const reportDataJsonPath = options['output-json'] || path.join(outputDir, 'report-data.json');
