@@ -20,7 +20,7 @@
     # 自定义配置文件
     python -m html_to_word.html_to_word_export --input xxx.html --config html_to_word/html_to_word_config.yaml
 """
-
+import time
 import argparse
 import base64
 import io
@@ -595,26 +595,39 @@ class HtmlToWordExporter:
 
                 # .sr-chart-card 截图前：提取并移除标题（chart-title），让 Word 把标题独立放在图上
                 chart_title = None
+                chart_id = None
                 if selector == ".sr-chart-card":
                     try:
-                        chart_title = page.evaluate(
+                        result = page.evaluate(
                             """(sid) => {
                                 const el = document.querySelector(`[data-snapshot-id="${sid}"]`);
                                 if (!el) return null;
                                 const title = el.querySelector('.chart-title, .sr-chart-title');
-                                if (!title) return null;
-                                const text = (title.textContent || '').trim();
-                                title.parentNode.removeChild(title);
-                                return text;
+                                let titleText = null;
+                                if (title) {
+                                    titleText = (title.textContent || '').trim();
+                                    title.parentNode.removeChild(title);
+                                }
+                                // 同时找内部图表容器 ID（chw / ch-ring / chart-box 等带 id 的子元素）
+                                const chartEl = el.querySelector('[id]:not([id=""])');
+                                const chartId = chartEl ? chartEl.getAttribute('id') : null;
+                                return { title: titleText, chartId: chartId };
                             }""",
                             snap_id,
                         )
+                        if result:
+                            chart_title = result.get('title')
+                            chart_id = result.get('chartId')
                     except Exception as e:
                         _log(f".sr-chart-card 标题提取失败（忽略）: {e}", "WARNING")
                 if chart_title:
                     if not hasattr(self, "_snapshot_titles"):
                         self._snapshot_titles = {}
                     self._snapshot_titles[snap_id] = chart_title
+                if chart_id:
+                    if not hasattr(self, "_snapshot_chart_ids"):
+                        self._snapshot_chart_ids = {}
+                    self._snapshot_chart_ids[snap_id] = chart_id
 
                 try:
                     el.screenshot(path=str(img_path))
@@ -1098,6 +1111,11 @@ class HtmlToWordExporter:
                 pf.space_before = Mm(base_before)
                 pf.space_after = Mm(2.1 if is_h2 else 1.4)
                 _apply_indent(p)
+                # 标题前加无序项目符号 "▪ "（方形项目符号）
+                run = p.add_run("▪  ")
+                run.bold = True
+                run.font.size = Pt(14)
+                run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
                 run = p.add_run(text)
                 run.bold = True
                 run.font.size = Pt(14)
@@ -1109,6 +1127,10 @@ class HtmlToWordExporter:
                     continue
                 p = container.add_paragraph("")
                 _apply_indent(p)
+                # 首行缩进 7.4mm（2em 中文段首）
+                p.paragraph_format.first_line_indent = Mm(7.4)
+                # 加大行距：1.5 倍
+                p.paragraph_format.line_spacing = 1.5
                 run = p.add_run(text)
                 run.font.name = '微软雅黑'
                 run.font.size = Pt(12)
@@ -1138,6 +1160,13 @@ class HtmlToWordExporter:
                                 tbl_pr.append(tbl_ind)
                             tbl_ind.set(qn('w:w'), str(int(Mm(10).twips)))
                             tbl_ind.set(qn('w:type'), 'dxa')
+                    # 增大单元格行距：给所有单元格内的段落加 1.5 倍行距
+                    for row in last_tbl.rows:
+                        for cell in row.cells:
+                            for cell_p in cell.paragraphs:
+                                cell_p.paragraph_format.line_spacing = 1.5
+                                cell_p.paragraph_format.space_before = Pt(2)
+                                cell_p.paragraph_format.space_after = Pt(2)
                 first_block = False
 
     # ── 首页（封面）──────────────────────────────────
@@ -1617,45 +1646,56 @@ class HtmlToWordExporter:
         return new_section
 
     def _add_page_number_footer(self, section):
-        """给指定 section 的 footer 加居中页码（PAGE 域），封面 section 不被调用。
+        """给指定 section 的 footer 加居中页码（PAGE / NUMPAGES 域），
+        格式：当前页 / 总页数。封面 section 不被调用。
 
         实现：section.footer.is_linked_to_previous = False 断开继承，
-        在 footer 段落里插入 PAGE 域，居中对齐。
+        在 footer 段落里插入 PAGE 域 + " / " + NUMPAGES 域，居中对齐。
         同时设置 pgNumType start=1，让正文 section 从 1 开始计数（封面不计入正文页码）。
         """
         try:
             section.footer.is_linked_to_previous = False
-            # 清掉 footer 里已有的内容，重新写一个居中 PAGE 段
             footer = section.footer
             # 清空已有段落
             for p in list(footer.paragraphs):
                 p._element.getparent().remove(p._element)
             p = footer.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            # PAGE 域：fldChar begin → instrText 'PAGE' → fldChar separate → 占位 → fldChar end
-            run_begin = p.add_run()
-            fld_begin = OxmlElement("w:fldChar")
-            fld_begin.set(qn("w:fldCharType"), "begin")
-            run_begin._element.append(fld_begin)
 
-            run_instr = p.add_run()
-            instr = OxmlElement("w:instrText")
-            instr.set(qn("xml:space"), "preserve")
-            instr.text = " PAGE \\* MERGEFORMAT "
-            run_instr._element.append(instr)
+            def _add_field(run_p, instr_text, placeholder="1", size_pt=10.5):
+                """在 run_p 末尾插入一个 Word 域（fldChar/instrText/separate/占位/end）。"""
+                run_begin = run_p.add_run()
+                fld_begin = OxmlElement("w:fldChar")
+                fld_begin.set(qn("w:fldCharType"), "begin")
+                run_begin._element.append(fld_begin)
 
-            run_sep = p.add_run()
-            fld_sep = OxmlElement("w:fldChar")
-            fld_sep.set(qn("w:fldCharType"), "separate")
-            run_sep._element.append(fld_sep)
+                run_instr = run_p.add_run()
+                instr = OxmlElement("w:instrText")
+                instr.set(qn("xml:space"), "preserve")
+                instr.text = f" {instr_text} \\* MERGEFORMAT "
+                run_instr._element.append(instr)
 
-            run_placeholder = p.add_run("1")
-            run_placeholder.font.size = Pt(10.5)
+                run_sep = run_p.add_run()
+                fld_sep = OxmlElement("w:fldChar")
+                fld_sep.set(qn("w:fldCharType"), "separate")
+                run_sep._element.append(fld_sep)
 
-            run_end = p.add_run()
-            fld_end = OxmlElement("w:fldChar")
-            fld_end.set(qn("w:fldCharType"), "end")
-            run_end._element.append(fld_end)
+                run_placeholder = run_p.add_run(placeholder)
+                run_placeholder.font.size = Pt(size_pt)
+
+                run_end = run_p.add_run()
+                fld_end = OxmlElement("w:fldChar")
+                fld_end.set(qn("w:fldCharType"), "end")
+                run_end._element.append(fld_end)
+
+            # 插入 PAGE 域
+            _add_field(p, "PAGE", "1")
+            # 分隔符 " / "
+            sep_run = p.add_run(" / ")
+            sep_run.font.size = Pt(10.5)
+            # 插入 SECTIONPAGES 域（只算当前 section 的总页数 = 正文 section 页数，
+            # 不含封面/版权页）
+            _add_field(p, "SECTIONPAGES", "1")
 
             # 让正文 section 页码从 1 开始（封面 section 不带页码，从节起始重算）
             sect_pr = section._sectPr
@@ -2110,13 +2150,31 @@ class HtmlToWordExporter:
                         run.font.size = Pt(13)  # >11pt（用户 mark）
                         run.font.color.rgb = RGBColor.from_string("1A1F36")
                 elif "sr-tag--light" in classes:
-                    # sr-tag--light 优先（同时带 --medium/--blue/--success 时也走 light 浅底深字样式）
+                    # sr-tag--light 浅底深字样式；底色按次要类（--medium/--blue/--success 等）
+                    # 单独分配（用户要求"按照标签单独分配一些合适的底色"）
+                    # bg 用浅色调（对应 HTML 中 .sr-tag--light + .sr-tag--X 的语义）
+                    light_bg_map = {
+                        "sr-tag--critical":    ("FFD3CC", "CF171D"),  # 浅红 + 深红字
+                        "sr-tag--high":        ("FFE0BF", "FA721B"),  # 浅橙 + 深橙字
+                        "sr-tag--medium":      ("FFE9CC", "D6860D"),  # 浅黄 + 深黄字
+                        "sr-tag--medium-low":  ("FFF0BF", "D6860D"),  # 浅米黄 + 深黄字
+                        "sr-tag--low":         ("E8F4FF", "1C6EFF"),  # 浅蓝 + 蓝字
+                        "sr-tag--info":        ("E8F4FF", "1C6EFF"),  # 浅蓝 + 蓝字
+                        "sr-tag--success":     ("CCFFE7", "12A679"),  # 浅绿 + 深绿字
+                        "sr-tag--blue":        ("E8F4FF", "1C6EFF"),  # 浅蓝 + 蓝字
+                    }
+                    bg_hex, fg_hex = ("EDF1F7", "1A1F36")  # 默认浅灰
+                    for c in classes:
+                        if c in light_bg_map:
+                            bg_hex, fg_hex = light_bg_map[c]
+                            break
                     text = child.get_text(" ", strip=True)
                     if text:
                         run = p.add_run(f" {text} ")
                         run.font.size = Pt(9)
-                        run.font.color.rgb = RGBColor.from_string("1A1F36")
-                        self._set_run_shading(run, "EDF1F7")
+                        run.font.bold = True
+                        run.font.color.rgb = RGBColor.from_string(fg_hex)
+                        self._set_run_shading(run, bg_hex)
                 elif any(c in ("sr-tag--success", "sr-tag--info", "sr-tag--blue",
                                "sr-tag--critical", "sr-tag--high", "sr-tag--medium",
                                "sr-tag--medium-low", "sr-tag--low") for c in classes):
@@ -2534,6 +2592,11 @@ class HtmlToWordExporter:
                 return
             titles = getattr(self, "_snapshot_titles", {}) or {}
             chart_title = (titles.get(snap) or "").strip()
+            chart_ids = getattr(self, "_snapshot_chart_ids", {}) or {}
+            chart_id = (chart_ids.get(snap) or "").strip()
+            # 这 4 个图缩小 50% 居中（用户要求）
+            shrink_ids = {"m2-ring2", "m2-bar-sys", "m3-web-top5-bar", "m3-nonweb-top5-bar"}
+            should_shrink = chart_id in shrink_ids
             # 图前：写小标题（沿用 HTML .chart-title 视觉：左对齐、加粗、11pt）
             if chart_title:
                 title_p = container.add_paragraph()
@@ -2544,7 +2607,19 @@ class HtmlToWordExporter:
                 t_run.font.size = Pt(11)
                 t_run.font.color.rgb = RGBColor.from_string("1A1F36")
             w, h = self._fit_image_size(img_path)
-            if w is None or h is None:
+            if should_shrink:
+                # 缩小 50%：宽度减半
+                if w is None or h is None:
+                    content_w = self.config["docx"]["page_width_mm"] - 2 * self.config["docx"]["margin_mm"]
+                    pic_w = Mm(content_w / 2)
+                    pic_h = None
+                else:
+                    pic_w = Mm(int(w.mm / 2))
+                    pic_h = Mm(int(h.mm / 2))
+                pic_p = container.add_picture(img_path, width=pic_w, height=pic_h)
+                # 居中
+                pic_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            elif w is None or h is None:
                 content_w = self.config["docx"]["page_width_mm"] - 2 * self.config["docx"]["margin_mm"]
                 pic_p = container.add_picture(img_path, width=Mm(content_w))
             else:
@@ -3190,12 +3265,29 @@ class HtmlToWordExporter:
 
     def run(self):
         """编排：load_config → render_html → snapshot → extract_dom → assemble_docx。"""
+        t_total = time.perf_counter()
         try:
+            t0 = time.perf_counter()
             self.load_config()
+            _log(f"[耗时] load_config: {(time.perf_counter() - t0) * 1000:.0f} ms")
+
+            t0 = time.perf_counter()
             page = self.render_html()
+            _log(f"[耗时] render_html: {(time.perf_counter() - t0) * 1000:.0f} ms")
+
+            t0 = time.perf_counter()
             snapshot_map = self.snapshot_complex_components(page)
+            _log(f"[耗时] snapshot_complex_components: {(time.perf_counter() - t0) * 1000:.0f} ms ({len(snapshot_map)} 张图)")
+
+            t0 = time.perf_counter()
             root = self.extract_dom(page)
+            _log(f"[耗时] extract_dom: {(time.perf_counter() - t0) * 1000:.0f} ms")
+
+            t0 = time.perf_counter()
             self.assemble_docx(root, snapshot_map, self.output_path)
+            _log(f"[耗时] assemble_docx: {(time.perf_counter() - t0) * 1000:.0f} ms")
+
+            _log(f"[总耗时] Word 导出完成: {(time.perf_counter() - t_total) * 1000:.0f} ms")
             _log(f"转换完成: {self.output_path}")
         finally:
             self.close()

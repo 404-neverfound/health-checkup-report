@@ -352,16 +352,22 @@ function renderTopRiskAssetsSummary(data) {
   const summaryText = CORE_BUSINESS_SUMMARY_BY_GRADE[grade]
     || CORE_BUSINESS_SUMMARY_BY_GRADE['中'];
 
-  // 取上面风险资产 TOP5 的 IP 前 3 个（按资产排序顺序，去重）
-  const topTargets = rows
+  // 取上面风险资产 TOP5 的 IP，按资产排序顺序去重
+  const allTargets = rows
     .map((row) => String(row.ip || '').trim())
     .filter(Boolean)
-    .filter((value, index, list) => list.indexOf(value) === index)
-    .slice(0, 3);
+    .filter((value, index, list) => list.indexOf(value) === index);
+  // 超过 3 个时只展示前 3 个，结尾加"等资产"
+  const showCount = 3;
+  const truncated = allTargets.length > showCount;
+  const topTargets = allTargets.slice(0, showCount);
 
-  const targetText = topTargets.length
+  let targetText = topTargets.length
     ? topTargets.map((name) => `<strong>${escapeHtml(name)}</strong>`).join('、')
     : '<strong>重点风险资产</strong>';
+  if (truncated) {
+    targetText += '等资产';
+  }
 
   return `${summaryText}修复方案重点针对 ${targetText}。`;
 }
@@ -435,7 +441,7 @@ function renderExploitPotentialLoss(data) {
   const n = Math.max(0, Number(exploitStats.total || 0));
   const total = n * 100;
 
-  return '<table class="report-table sr-tbl">' +
+  return '<table class="report-table sr-tbl" data-col-widths="28.5,141.5">' +
     '<thead><tr><th>潜在损失</th><th>漏洞利用攻击如果未及时发现和对抗，可能导致核心系统敏感数据泄露、主机被控挖矿、数据勒索加密等重大危害事件</th></tr></thead>' +
     '<tbody>' +
     '<tr><td>潜在损失规避评估（影响面）</td><td><strong>' + n + '</strong>个高危可利用漏洞*100万元≈<strong>' + total + '</strong>万元（基于行业公开事例评估测算，单个漏洞利用攻击入侵成功导致的平均安全损失约<strong>100</strong>万元）</td></tr>' +
@@ -451,7 +457,7 @@ function renderSilverFoxPotentialLoss(data) {
   const n = c2Count + virusCount;
   const total = Math.round(n * 0.2 * 10) / 10;
 
-  return '<table class="report-table sr-tbl">' +
+  return '<table class="report-table sr-tbl" data-col-widths="28.5,141.5">' +
     '<thead><tr><th>潜在损失</th><th>主机外联成功将被感染银狐木马，利用主机的即时通讯软件在单位内部执行诈骗，或以内部员工合法身份窃取内部敏感数据</th></tr></thead>' +
     '<tbody>' +
     '<tr><td>潜在损失规避评估（影响面）</td><td><strong>' + n + '</strong>起银狐外联*2000元≈<strong>' + total + '</strong>万元（基于深信服安全运营中心2025年统计，平均每起银狐木马攻击造成的个人损失约2000元）</td></tr>' +
