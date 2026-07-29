@@ -321,17 +321,24 @@ async function main() {
     }
 
     logger('开始准备威胁预防所需表格...');
-    preventionTables = await collectPreventionTableExports({
-      customer: options.customer,
-      start: effectiveTimeRange.start,
-      end: effectiveTimeRange.end,
-      soarCookiePath: options['cookie-path'],
-      msswCookiePath: options['mssw-cookie-path'],
-      msswBaseUrl: options['mssw-base-url'],
-      soarBaseUrl: options['soar-base-url'],
-      outputDir: getTmpExportDir(),
-      logger
-    });
+    preventionTables = options['skip-prevention']
+      ? (logger('威胁预防表格使用本地文件（skip-prevention 模式）'),
+        {
+          weakpwd: { filePath: path.join(__dirname, '弱口令清单.xlsx'), source: 'local' },
+          vuln:    { filePath: path.join(__dirname, '漏洞清单.xlsx'),    source: 'local' },
+          exposure:{ filePath: path.join(__dirname, '暴露面清单.xlsx'), source: 'local' },
+        })
+      : await collectPreventionTableExports({
+          customer: options.customer,
+          start: effectiveTimeRange.start,
+          end: effectiveTimeRange.end,
+          soarCookiePath: options['cookie-path'],
+          msswCookiePath: options['mssw-cookie-path'],
+          msswBaseUrl: options['mssw-base-url'],
+          soarBaseUrl: options['soar-base-url'],
+          outputDir: getTmpExportDir(),
+          logger
+        });
     logger(`威胁预防表格已就绪: weakpwd=${preventionTables.weakpwd.filePath}, vuln=${preventionTables.vuln.filePath}, exposure=${preventionTables.exposure.filePath}`);
 
     const preventionData = await calculatePreventionData({
@@ -631,6 +638,7 @@ Options:
   --output-dir <path>            Output directory
   --af <true|false>              是否开通防火墙云情报网关订阅（必填，由 skill 层反问后传入）
   --sip <true|false>             是否开通SIP云端情报检测（必填，由 skill 层反问后传入）
+  --skip-prevention              使用项目根目录下的本地清单（弱口令清单.xlsx / 漏洞清单.xlsx / 暴露面清单.xlsx），跳过接口导出
 `);
 }
 
