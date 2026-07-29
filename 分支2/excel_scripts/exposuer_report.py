@@ -22,7 +22,7 @@ TEMP_DIR        = r"C:\Users\User\Downloads\temp_report"
 OUTPUT_FILE     = r"C:\Users\User\Downloads\temp_report\暴露面清单.xlsx"
 POLL_INTERVAL  = 5     # 轮询间隔（秒）
 REPORT_LIMIT   = 100   # 接口3每次查询的报告数量
-SCRIPT_TIMEOUT = 3600  # 全局超时：1小时
+# SCRIPT_TIMEOUT = 3600  # 全局超时：1小时
 MAX_RETRIES    = 3     # 最大重试次数
 RETRY_DELAY    = 3     # 重试等待时间（秒）
 # ==========================================================
@@ -847,17 +847,17 @@ def build_output_excel(file_b: str, file_c: str, output_path: str,
         log(f"[debug] 未找到时间数据已保存: {debug_path}")
 
 
-def _on_script_timeout():
-    log(f"错误：脚本执行超时（超过 {SCRIPT_TIMEOUT // 60} 分钟），强制退出", "ERROR")
-    os._exit(1)
+# def _on_script_timeout():
+#     log(f"错误：脚本执行超时（超过 {SCRIPT_TIMEOUT // 60} 分钟），强制退出", "ERROR")
+#     os._exit(1)
 
 
 # ---------- 主流程 ----------
 
 def main():
-    _timer = threading.Timer(SCRIPT_TIMEOUT, _on_script_timeout)
-    _timer.daemon = True
-    _timer.start()
+    # _timer = threading.Timer(SCRIPT_TIMEOUT, _on_script_timeout)
+    # _timer.daemon = True
+    # _timer.start()
 
     parser = argparse.ArgumentParser(
         description='EASM暴露面清单生成工具',
@@ -972,7 +972,7 @@ def main():
     build_output_excel(file_b, file_c, OUTPUT_FILE, start_dt=start_dt, end_dt=end_dt,
                        debug_mode=args.debug)
 
-    _timer.cancel()
+    # _timer.cancel()
     log(f"完成！输出文件: {OUTPUT_FILE}")
 
 

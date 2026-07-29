@@ -31,7 +31,7 @@ TEMP_DIR     = r"C:\Users\User\Downloads\temp_report"
 OUTPUT_FILE  = r"C:\Users\User\Downloads\漏洞清单.xlsx"
 
 POLL_INTERVAL   = 5     # 轮询间隔（秒）
-SCRIPT_TIMEOUT  = 3600  # 全局超时：1小时
+# SCRIPT_TIMEOUT  = 3600  # 全局超时：1小时
 MAX_RETRIES     = 3     # 最大重试次数
 RETRY_DELAY     = 3     # 重试等待时间（秒）
 PAGE_LIMIT      = 100   # 列表接口每次查询数量
@@ -810,15 +810,15 @@ def extract_mssw_header_styles(file_b_path: str) -> Tuple[Dict[str, object], obj
 #  主流程
 # ====================================================================
 
-def _on_script_timeout():
-    log(f"错误：脚本执行超时（超过 {SCRIPT_TIMEOUT // 60} 分钟），强制退出", "ERROR")
-    os._exit(1)
+# def _on_script_timeout():
+#     log(f"错误：脚本执行超时（超过 {SCRIPT_TIMEOUT // 60} 分钟），强制退出", "ERROR")
+#     os._exit(1)
 
 
 def main():
-    _timer = threading.Timer(SCRIPT_TIMEOUT, _on_script_timeout)
-    _timer.daemon = True
-    _timer.start()
+    # _timer = threading.Timer(SCRIPT_TIMEOUT, _on_script_timeout)
+    # _timer.daemon = True
+    # _timer.start()
 
     parser = argparse.ArgumentParser(
         description='漏洞清单生成工具',
@@ -1086,7 +1086,7 @@ def main():
     wb_out.close()
 
     total_rows = len(easm_data) + len(mssw_data)
-    _timer.cancel()
+    # _timer.cancel()
     log(f"完成！")
     log(f"  MSSW  数据: {len(mssw_data)} 行")
     log(f"  EASM 数据: {len(easm_data)} 行")
