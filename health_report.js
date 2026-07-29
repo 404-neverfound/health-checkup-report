@@ -507,7 +507,10 @@ async function main() {
   {
     const r = reportData.riskOverview || {};
     r.topRiskAssetsSectionHide = !Array.isArray(r.topRiskAssets) || r.topRiskAssets.length === 0;
-    logger(`3.2 风险资产 TOP5 章节隐藏标记: ${r.topRiskAssetsSectionHide}`);
+    // 2.2 节隐藏时，章节 2 末尾仍展示「综上...」精简段落（去掉「修复方案重点针对 xxx 等资产。」），
+    // 由 HTML 里独立的 fallback 段落承载，显示条件与 2.2 节隐藏相反。
+    r.topRiskAssetsSummaryFallbackHide = !r.topRiskAssetsSectionHide;
+    logger(`3.2 风险资产 TOP5 章节隐藏标记: ${r.topRiskAssetsSectionHide} (fallback 显示: ${!r.topRiskAssetsSummaryFallbackHide})`);
   }
 
   // 3.1 关键风险卡片：无数据类别不展示（通过 data-hide 机制驱动）

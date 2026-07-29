@@ -24,6 +24,7 @@ const DATA_FIELD_MAP = {
 const SECTION_RENDERERS = {
   'assetLedger.summary': renderAssetLedgerSummary,
   'riskOverview.topRiskAssetsSummary': renderTopRiskAssetsSummary,
+  'riskOverview.topRiskAssetsSummaryFallback': renderTopRiskAssetsSummaryFallback,
   'keyRisks.01.desc': renderThreatActorRiskDescription,
   'riskDetails.caseStudy': renderCaseStudySection,
   'riskDetails.potentialLoss': renderPotentialLoss,
@@ -370,6 +371,15 @@ function renderTopRiskAssetsSummary(data) {
   }
 
   return `${summaryText}修复方案重点针对 ${targetText}。`;
+}
+
+// 2.2 节隐藏时章节 2 末尾的兜底段落：仅展示按评级的基础 summaryText，
+// 去掉「修复方案重点针对 xxx 等资产。」半句（无 topRiskAssets 数据时无从针对具体资产）。
+function renderTopRiskAssetsSummaryFallback(data) {
+  const grade = String(getPath(data, 'scoring.grade') || '').trim();
+  const summaryText = CORE_BUSINESS_SUMMARY_BY_GRADE[grade]
+    || CORE_BUSINESS_SUMMARY_BY_GRADE['中'];
+  return summaryText;
 }
 
 function renderThreatActorRiskDescription(data) {
