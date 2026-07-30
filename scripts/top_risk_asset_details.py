@@ -335,26 +335,26 @@ def build_detail_lines(asset, incident_counts, vuln_counts, weakpwd_counts, expo
     lines = []
     if total_events > 0:
         lines.append(
-            f"总计安全事件{total_events}个，其中，"
-            f"病毒木马&C2外联{malware_and_c2_events}起，"
-            f"网站攻击&漏洞攻击{exploit_events}起，"
-            f"其他事件{other_events}起"
+            f"总计安全事件<strong>{total_events}</strong>个，其中，"
+            f"病毒木马&C2外联<strong>{malware_and_c2_events}</strong>起，"
+            f"网站攻击&漏洞攻击<strong>{exploit_events}</strong>起，"
+            f"其他事件<strong>{other_events}</strong>起"
         )
     if high_vulns > 0:
-        lines.append(f"该资产共发现在{high_vulns}个高危及以上漏洞")
+        lines.append(f"该资产共发现在<strong>{high_vulns}</strong>个高危及以上漏洞")
     if weak_passwords > 0:
-        lines.append(f"该资产共发现{weak_passwords}个弱口令")
+        lines.append(f"该资产共发现<strong>{weak_passwords}</strong>个弱口令")
     if total_exposures > 0 and (non_web_exposures > 0 or web_exposures > 0):
-        non_web_text = f"{non_web_exposures}个非Web服务"
+        non_web_text = f"<strong>{non_web_exposures}</strong>个非Web服务"
         if non_web_exposures > 0 and non_web_example_text:
             non_web_text += f"（如{non_web_example_text}等）"
 
-        web_text = f"{web_exposures}个Web服务"
+        web_text = f"<strong>{web_exposures}</strong>个Web服务"
         if web_exposures > 0 and web_example_text:
             web_text += f"（如{web_example_text}）"
 
         lines.append(
-            f"该资产共发现{total_exposures}个风险暴露面。"
+            f"该资产共发现<strong>{total_exposures}</strong>个风险暴露面。"
             f"含{non_web_text}与{web_text}"
         )
     lines.append(f"该资产{'已安装' if has_aes else '尚未安装'}EDR")
