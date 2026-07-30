@@ -819,7 +819,11 @@ function syncPipelineDeviceData(html, data) {
 
 function buildOutputFilename(data) {
   const projectBackground = getProjectBackground(data);
-  const raw = `${projectBackground.customerName || '客户'}_${projectBackground.startDate || 'start'}_${projectBackground.endDate || 'end'}_安全体检报告.html`;
+  const customerName = projectBackground.customerName || '客户';
+  const generatedAt = projectBackground.generatedAt ? new Date(projectBackground.generatedAt) : new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const timestamp = `${generatedAt.getFullYear()}${pad(generatedAt.getMonth() + 1)}${pad(generatedAt.getDate())}${pad(generatedAt.getHours())}${pad(generatedAt.getMinutes())}`;
+  const raw = `【深信服】首次安全体检报告-${customerName}-${timestamp}.html`;
   return raw.replace(/[\\/:*?"<>|]/g, '_');
 }
 

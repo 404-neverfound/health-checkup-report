@@ -43,9 +43,13 @@ node "$HOME\.openclaw\workspace\skills\health-checkup-report\health_report.js" `
 - 开始时间 = `max(最早 service_start, 结束时间 - 29 天)`
 - 结束时间 = `min(报告生成日前一天, 最早非空 service_end)`
 
+## 超时处理
+
+脚本运行最长等待 **3 分钟**（180 秒）。如果超过 3 分钟仍未生成输出文件（`output\report-data.json` 或 `--output-json` 指定的路径），立即终止进程并告知用户"报告生成超时，请稍后重试或缩小查询时间范围"。
+
 ## 输出
 
-脚本会把用于 HTML 的结构化数据落盘到 `output\report-data.json`；如需指定路径，可传 `--output-json "<JSON路径>"`。脚本返回 JSON，其中 `html_path` 是生成的 HTML 附件路径，`xdrExports` 是本次自动导出的 XDR 表格文件路径。第一章数据使用 `projectBackground.*`，事件闭环统计写入 `riskDetails.*`。
+输出给用户的是项目根目录下的 安全体检报告.zip，不要返回多余文件。
 
 ## 缺参数处理
 

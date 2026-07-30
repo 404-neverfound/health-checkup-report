@@ -583,11 +583,23 @@ async function main() {
 
   let wordExport = null;
   if (branch1Result) {
+    const htmlPath = result.html_path || result.filePath || '';
+    const baseName = path.basename(htmlPath, '.html');
+    const wordDir = path.join(root, '安全体检报告');
+    await fs.mkdir(wordDir, { recursive: true });
+    const wordPath = path.join(wordDir, `${baseName}.docx`);
     wordExport = await timedPhase('导出 Word 报告 exportBranch1Word', () => exportBranch1Word({
-      htmlPath: result.html_path || result.filePath || '',
-      wordPath: replaceExtension(result.html_path || result.filePath || '', '.docx')
+      htmlPath,
+      wordPath
     }));
     logger(`Word 已生成: ${wordExport.wordPath}`);
+  }
+
+  // 将安全体检报告文件夹打包为 zip
+  const reportDir = path.join(root, '安全体检报告');
+  const zipPath = await timedPhase('打包安全体检报告 ZIP', () => zipDirectory(reportDir, logger));
+  if (zipPath) {
+    logger(`ZIP 已生成: ${zipPath}`);
   }
 
   console.log(`[总耗时] 报告导出完成: ${Date.now() - __main_t0} ms`);
@@ -596,6 +608,7 @@ async function main() {
     ...result,
     xdrExports: tableExports,
     word_path: wordExport ? wordExport.wordPath : null,
+    zip_path: zipPath || null,
     branch1Artifacts: branch1Result
       ? {
         ...branch1Result.artifacts,
@@ -899,6 +912,38 @@ async function fileExists(filePath) {
   }
 }
 
+async function zipDirectory(sourceDir, logger) {
+  const resolvedSource = path.resolve(sourceDir);
+  try {
+    await fs.access(resolvedSource);
+  } catch (_) {
+    logWith(logger, `ZIP 跳过: 目录不存在 ${resolvedSource}`);
+    return null;
+  }
+
+  const parentDir = path.dirname(resolvedSource);
+  const dirName = path.basename(resolvedSource);
+  const zipPath = path.join(parentDir, `${dirName}.zip`);
+
+  // 删除已有的同名 zip
+  await fs.rm(zipPath, { force: true });
+
+  const { execFile } = require('child_process');
+  return new Promise((resolve) => {
+    execFile('powershell', [
+      '-NoProfile', '-Command',
+      `Compress-Archive -Path '${resolvedSource}' -DestinationPath '${zipPath}' -Force`
+    ], { windowsHide: true }, (error, stdout, stderr) => {
+      if (error) {
+        logWith(logger, `ZIP 压缩失败: ${stderr || error.message}`);
+        resolve(null);
+        return;
+      }
+      resolve(zipPath);
+    });
+  });
+}
+
 function execPythonScript(scriptPath) {
   const { execFile } = require('child_process');
   return new Promise((resolve, reject) => {
@@ -923,11 +968,6 @@ function formatLocalDate(date) {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
-}
-
-function replaceExtension(filePath, extension) {
-  const parsed = path.parse(filePath);
-  return path.join(parsed.dir, `${parsed.name}${extension}`);
 }
 
 const MAX_QUERY_DAY_SPAN = 30;
