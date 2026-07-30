@@ -20,7 +20,7 @@
     # 自定义配置文件
     python -m html_to_word.html_to_word_export --input xxx.html --config html_to_word/html_to_word_config.yaml
 """
-
+import time
 import argparse
 import base64
 import io
@@ -502,6 +502,48 @@ class HtmlToWordExporter:
         except Exception as e:
             _log(f"冻结布局注入失败（忽略）: {e}", "WARNING")
 
+    def _snapshot_grid2_in_slot(self, page, slot_snap_id, tmp_dir, snapshot_map):
+        """把 slot 内部第一个 .sr-chart-grid-2 整体截图成一张图，
+        在 DOM 中替换为 <img data-snapshot> 占位，写入 snapshot_map。
+        用于 3.3.1 互联网业务 slot：把 Web top5 + 非Web top5 合成一张图。"""
+        grid_snap_id = f"sr-snap-{self._snapshot_index}"
+        self._snapshot_index += 1
+        # 给 slot 内的 grid-2 打标
+        marked = page.evaluate(
+            """([slotSid, gridSid]) => {
+                const slot = document.querySelector(`[data-snapshot-id="${slotSid}"]`);
+                if (!slot) return false;
+                const grid = slot.querySelector('.sr-chart-grid-2');
+                if (!grid) return false;
+                grid.setAttribute('data-snapshot-id', gridSid);
+                return true;
+            }""",
+            [slot_snap_id, grid_snap_id],
+        )
+        if not marked:
+            return
+        grid_locator = page.locator(f'[data-snapshot-id="{grid_snap_id}"]')
+        img_path = tmp_dir / f"comp-{grid_snap_id}.png"
+        grid_locator.screenshot(path=str(img_path))
+        # 替换为 img 占位
+        page.evaluate(
+            """(sid) => {
+                const el = document.querySelector(`[data-snapshot-id="${sid}"]`);
+                if (!el) return;
+                const img = document.createElement('img');
+                img.setAttribute('data-snapshot', sid);
+                img.setAttribute('alt', 'chart');
+                img.style.maxWidth = '100%';
+                el.replaceWith(img);
+            }""",
+            grid_snap_id,
+        )
+        snapshot_map[grid_snap_id] = str(img_path)
+        # 记录 grid-2 合成图的图注文字（图下居中显示）
+        if not hasattr(self, "_snapshot_grid_captions"):
+            self._snapshot_grid_captions = {}
+        self._snapshot_grid_captions[grid_snap_id] = "Web服务和非Web服务风险分布 top5"
+
     def snapshot_complex_components(self, page=None):
         """遍历 snapshot_selectors，逐个截图，返回 {占位 id: 图片路径} 映射。"""
         page = page or self._page
@@ -553,37 +595,66 @@ class HtmlToWordExporter:
 
                 # .sr-chart-slot 仅含 .sr-chart-card / 布局网格时跳过整槽截图，
                 # 让内部卡片单独截图（Word 里多张分布图独立呈现）
+                # 例外 1：id=slot-event-charts（3.2.3 安全事件分布）整体截图成一张图，
+                #         保留 HTML 里两张 card 并排 + 各自带标题的视觉，不在 Word 里加图前/图后文字。
+                # 例外 2：id=slot-internet-exposure（3.3.1 互联网业务）先把内部 .sr-chart-grid-2
+                #         （Web top5 + 非Web top5）整体截图合成一张图替换为 img 占位，
+                #         再让 slot 走原跳过逻辑（其它两个 --full card 各自独立截图）。
                 if selector == ".sr-chart-slot":
                     try:
-                        should_skip = page.evaluate(
+                        slot_id = page.evaluate(
                             """(sid) => {
                                 const el = document.querySelector(`[data-snapshot-id="${sid}"]`);
-                                if (!el) return false;
-                                const children = Array.from(el.children).filter(c => c.nodeType === 1);
-                                if (children.length === 0) return false;
-                                // 允许直接子元素是 .sr-chart-card 或布局网格容器
-                                // （.sr-chart-grid-2 / .sr-chart-grid-3 等只承载布局）
-                                const layoutOnly = c =>
-                                    c.classList.contains('sr-chart-card') ||
-                                    /sr-chart-grid-\\d/.test(c.className || '');
-                                const allAllowed = children.every(layoutOnly);
-                                if (!allAllowed) return false;
-                                // 进一步校验：子元素里至少要有一张 .sr-chart-card
-                                // （布局网格内的卡片也算）
-                                const hasCard = children.some(c =>
-                                    c.classList.contains('sr-chart-card') ||
-                                    c.querySelector('.sr-chart-card'));
-                                if (!hasCard) return false;
-                                el.removeAttribute('data-snapshot-id');
-                                const parent = el.parentNode;
-                                while (el.firstChild) {
-                                    parent.insertBefore(el.firstChild, el);
-                                }
-                                parent.removeChild(el);
-                                return true;
+                                return el ? (el.getAttribute('id') || '') : '';
                             }""",
                             snap_id,
                         )
+                        # 例外 1：整体截图
+                        if slot_id == 'slot-event-charts':
+                            is_event_charts_slot = True
+                        else:
+                            is_event_charts_slot = False
+                        # 例外 2：先把 grid-2 合成一张图
+                        if slot_id == 'slot-internet-exposure':
+                            try:
+                                self._snapshot_grid2_in_slot(page, snap_id, tmp_dir, snapshot_map)
+                            except Exception as e:
+                                _log(f"slot-internet-exposure grid-2 合成截图失败（忽略）: {e}", "WARNING")
+                        if is_event_charts_slot:
+                            # 不拆卡，直接整体截图（落到下面的截图主流程）
+                            should_skip = False
+                        else:
+                            should_skip = page.evaluate(
+                                """(sid) => {
+                                    const el = document.querySelector(`[data-snapshot-id="${sid}"]`);
+                                    if (!el) return false;
+                                    const children = Array.from(el.children).filter(c => c.nodeType === 1);
+                                    if (children.length === 0) return false;
+                                    // 允许直接子元素是 .sr-chart-card / 布局网格容器 / 已截图的 img 占位
+                                    // （.sr-chart-grid-2 / .sr-chart-grid-3 等只承载布局；
+                                    //  img[data-snapshot] 是 grid-2 被合成截图后替换的占位）
+                                    const layoutOnly = c =>
+                                        c.classList.contains('sr-chart-card') ||
+                                        /sr-chart-grid-\\d/.test(c.className || '') ||
+                                        (c.tagName === 'IMG' && c.hasAttribute('data-snapshot'));
+                                    const allAllowed = children.every(layoutOnly);
+                                    if (!allAllowed) return false;
+                                    // 进一步校验：子元素里至少要有一张 .sr-chart-card
+                                    // （布局网格内的卡片也算；已截图的 img 占位不算）
+                                    const hasCard = children.some(c =>
+                                        c.classList.contains('sr-chart-card') ||
+                                        c.querySelector('.sr-chart-card'));
+                                    if (!hasCard) return false;
+                                    el.removeAttribute('data-snapshot-id');
+                                    const parent = el.parentNode;
+                                    while (el.firstChild) {
+                                        parent.insertBefore(el.firstChild, el);
+                                    }
+                                    parent.removeChild(el);
+                                    return true;
+                                }""",
+                                snap_id,
+                            )
                     except Exception as e:
                         _log(f".sr-chart-slot 检查失败（忽略）: {e}", "WARNING")
                         should_skip = False
@@ -593,28 +664,60 @@ class HtmlToWordExporter:
                 el = page.locator(f'[data-snapshot-id="{snap_id}"]')
                 img_path = tmp_dir / f"comp-{snap_id}.png"
 
-                # .sr-chart-card 截图前：提取并移除标题（chart-title），让 Word 把标题独立放在图上
+                # .sr-chart-card 截图前：提取标题（chart-title）。
+                # 默认移除标题（让 Word 把标题独立放在图上）；
+                # 但 keep_title_in_image 集合中的 chart_id 保留标题在图里（仅写图后居中 caption）。
+                # no_caption_ids 集合中的 chart_id 既不写图前小标题、也不写图后居中 caption。
                 chart_title = None
+                chart_id = None
+                keep_title_ids = {"m3-exposure-overview-bar", "m3-bar"}
+                no_caption_ids = {"top5-risk-bar"}  # 2.2 风险资产 TOP5 图：标题留图里，无图前/图后文字
                 if selector == ".sr-chart-card":
                     try:
-                        chart_title = page.evaluate(
-                            """(sid) => {
+                        result = page.evaluate(
+                            """([sid, keepIds, noCapIds]) => {
                                 const el = document.querySelector(`[data-snapshot-id="${sid}"]`);
                                 if (!el) return null;
                                 const title = el.querySelector('.chart-title, .sr-chart-title');
-                                if (!title) return null;
-                                const text = (title.textContent || '').trim();
-                                title.parentNode.removeChild(title);
-                                return text;
+                                let titleText = null;
+                                let keepTitle = false;
+                                // 找内部图表容器 ID
+                                const chartEl = el.querySelector('[id]:not([id=""])');
+                                const chartId = chartEl ? chartEl.getAttribute('id') : null;
+                                if (title) {
+                                    titleText = (title.textContent || '').trim();
+                                    // chartId 在 keepIds/noCapIds 中时保留标题在图里
+                                    if (chartId && (keepIds.includes(chartId) || noCapIds.includes(chartId))) {
+                                        keepTitle = true;
+                                    } else {
+                                        title.parentNode.removeChild(title);
+                                    }
+                                }
+                                return { title: titleText, chartId: chartId, keepTitle: keepTitle };
                             }""",
-                            snap_id,
+                            [snap_id, list(keep_title_ids), list(no_caption_ids)],
                         )
+                        if result:
+                            chart_title = result.get('title')
+                            chart_id = result.get('chartId')
+                            if result.get('keepTitle') and chart_id:
+                                if not hasattr(self, "_snapshot_keep_title"):
+                                    self._snapshot_keep_title = set()
+                                self._snapshot_keep_title.add(snap_id)
+                                if chart_id in no_caption_ids:
+                                    if not hasattr(self, "_snapshot_no_caption"):
+                                        self._snapshot_no_caption = set()
+                                    self._snapshot_no_caption.add(snap_id)
                     except Exception as e:
                         _log(f".sr-chart-card 标题提取失败（忽略）: {e}", "WARNING")
                 if chart_title:
                     if not hasattr(self, "_snapshot_titles"):
                         self._snapshot_titles = {}
                     self._snapshot_titles[snap_id] = chart_title
+                if chart_id:
+                    if not hasattr(self, "_snapshot_chart_ids"):
+                        self._snapshot_chart_ids = {}
+                    self._snapshot_chart_ids[snap_id] = chart_id
 
                 try:
                     el.screenshot(path=str(img_path))
@@ -1098,6 +1201,11 @@ class HtmlToWordExporter:
                 pf.space_before = Mm(base_before)
                 pf.space_after = Mm(2.1 if is_h2 else 1.4)
                 _apply_indent(p)
+                # 标题前加无序项目符号 "▪ "（方形项目符号）
+                run = p.add_run("▪  ")
+                run.bold = True
+                run.font.size = Pt(14)
+                run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
                 run = p.add_run(text)
                 run.bold = True
                 run.font.size = Pt(14)
@@ -1109,6 +1217,10 @@ class HtmlToWordExporter:
                     continue
                 p = container.add_paragraph("")
                 _apply_indent(p)
+                # 首行缩进 7.4mm（2em 中文段首）
+                p.paragraph_format.first_line_indent = Mm(7.4)
+                # 加大行距：1.5 倍
+                p.paragraph_format.line_spacing = 1.5
                 run = p.add_run(text)
                 run.font.name = '微软雅黑'
                 run.font.size = Pt(12)
@@ -1138,6 +1250,13 @@ class HtmlToWordExporter:
                                 tbl_pr.append(tbl_ind)
                             tbl_ind.set(qn('w:w'), str(int(Mm(10).twips)))
                             tbl_ind.set(qn('w:type'), 'dxa')
+                    # 增大单元格行距：给所有单元格内的段落加 1.5 倍行距
+                    for row in last_tbl.rows:
+                        for cell in row.cells:
+                            for cell_p in cell.paragraphs:
+                                cell_p.paragraph_format.line_spacing = 1.5
+                                cell_p.paragraph_format.space_before = Pt(2)
+                                cell_p.paragraph_format.space_after = Pt(2)
                 first_block = False
 
     # ── 首页（封面）──────────────────────────────────
@@ -1617,45 +1736,56 @@ class HtmlToWordExporter:
         return new_section
 
     def _add_page_number_footer(self, section):
-        """给指定 section 的 footer 加居中页码（PAGE 域），封面 section 不被调用。
+        """给指定 section 的 footer 加居中页码（PAGE / NUMPAGES 域），
+        格式：当前页 / 总页数。封面 section 不被调用。
 
         实现：section.footer.is_linked_to_previous = False 断开继承，
-        在 footer 段落里插入 PAGE 域，居中对齐。
+        在 footer 段落里插入 PAGE 域 + " / " + NUMPAGES 域，居中对齐。
         同时设置 pgNumType start=1，让正文 section 从 1 开始计数（封面不计入正文页码）。
         """
         try:
             section.footer.is_linked_to_previous = False
-            # 清掉 footer 里已有的内容，重新写一个居中 PAGE 段
             footer = section.footer
             # 清空已有段落
             for p in list(footer.paragraphs):
                 p._element.getparent().remove(p._element)
             p = footer.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            # PAGE 域：fldChar begin → instrText 'PAGE' → fldChar separate → 占位 → fldChar end
-            run_begin = p.add_run()
-            fld_begin = OxmlElement("w:fldChar")
-            fld_begin.set(qn("w:fldCharType"), "begin")
-            run_begin._element.append(fld_begin)
 
-            run_instr = p.add_run()
-            instr = OxmlElement("w:instrText")
-            instr.set(qn("xml:space"), "preserve")
-            instr.text = " PAGE \\* MERGEFORMAT "
-            run_instr._element.append(instr)
+            def _add_field(run_p, instr_text, placeholder="1", size_pt=10.5):
+                """在 run_p 末尾插入一个 Word 域（fldChar/instrText/separate/占位/end）。"""
+                run_begin = run_p.add_run()
+                fld_begin = OxmlElement("w:fldChar")
+                fld_begin.set(qn("w:fldCharType"), "begin")
+                run_begin._element.append(fld_begin)
 
-            run_sep = p.add_run()
-            fld_sep = OxmlElement("w:fldChar")
-            fld_sep.set(qn("w:fldCharType"), "separate")
-            run_sep._element.append(fld_sep)
+                run_instr = run_p.add_run()
+                instr = OxmlElement("w:instrText")
+                instr.set(qn("xml:space"), "preserve")
+                instr.text = f" {instr_text} \\* MERGEFORMAT "
+                run_instr._element.append(instr)
 
-            run_placeholder = p.add_run("1")
-            run_placeholder.font.size = Pt(10.5)
+                run_sep = run_p.add_run()
+                fld_sep = OxmlElement("w:fldChar")
+                fld_sep.set(qn("w:fldCharType"), "separate")
+                run_sep._element.append(fld_sep)
 
-            run_end = p.add_run()
-            fld_end = OxmlElement("w:fldChar")
-            fld_end.set(qn("w:fldCharType"), "end")
-            run_end._element.append(fld_end)
+                run_placeholder = run_p.add_run(placeholder)
+                run_placeholder.font.size = Pt(size_pt)
+
+                run_end = run_p.add_run()
+                fld_end = OxmlElement("w:fldChar")
+                fld_end.set(qn("w:fldCharType"), "end")
+                run_end._element.append(fld_end)
+
+            # 插入 PAGE 域
+            _add_field(p, "PAGE", "1")
+            # 分隔符 " / "
+            sep_run = p.add_run(" / ")
+            sep_run.font.size = Pt(10.5)
+            # 插入 SECTIONPAGES 域（只算当前 section 的总页数 = 正文 section 页数，
+            # 不含封面/版权页）
+            _add_field(p, "SECTIONPAGES", "1")
 
             # 让正文 section 页码从 1 开始（封面 section 不带页码，从节起始重算）
             sect_pr = section._sectPr
@@ -2110,13 +2240,31 @@ class HtmlToWordExporter:
                         run.font.size = Pt(13)  # >11pt（用户 mark）
                         run.font.color.rgb = RGBColor.from_string("1A1F36")
                 elif "sr-tag--light" in classes:
-                    # sr-tag--light 优先（同时带 --medium/--blue/--success 时也走 light 浅底深字样式）
+                    # sr-tag--light 浅底深字样式；底色按次要类（--medium/--blue/--success 等）
+                    # 单独分配（用户要求"按照标签单独分配一些合适的底色"）
+                    # bg 用浅色调（对应 HTML 中 .sr-tag--light + .sr-tag--X 的语义）
+                    light_bg_map = {
+                        "sr-tag--critical":    ("FFD3CC", "CF171D"),  # 浅红 + 深红字
+                        "sr-tag--high":        ("FFE0BF", "FA721B"),  # 浅橙 + 深橙字
+                        "sr-tag--medium":      ("FFE9CC", "D6860D"),  # 浅黄 + 深黄字
+                        "sr-tag--medium-low":  ("FFF0BF", "D6860D"),  # 浅米黄 + 深黄字
+                        "sr-tag--low":         ("E8F4FF", "1C6EFF"),  # 浅蓝 + 蓝字
+                        "sr-tag--info":        ("E8F4FF", "1C6EFF"),  # 浅蓝 + 蓝字
+                        "sr-tag--success":     ("CCFFE7", "12A679"),  # 浅绿 + 深绿字
+                        "sr-tag--blue":        ("E8F4FF", "1C6EFF"),  # 浅蓝 + 蓝字
+                    }
+                    bg_hex, fg_hex = ("EDF1F7", "1A1F36")  # 默认浅灰
+                    for c in classes:
+                        if c in light_bg_map:
+                            bg_hex, fg_hex = light_bg_map[c]
+                            break
                     text = child.get_text(" ", strip=True)
                     if text:
                         run = p.add_run(f" {text} ")
                         run.font.size = Pt(9)
-                        run.font.color.rgb = RGBColor.from_string("1A1F36")
-                        self._set_run_shading(run, "EDF1F7")
+                        run.font.bold = True
+                        run.font.color.rgb = RGBColor.from_string(fg_hex)
+                        self._set_run_shading(run, bg_hex)
                 elif any(c in ("sr-tag--success", "sr-tag--info", "sr-tag--blue",
                                "sr-tag--critical", "sr-tag--high", "sr-tag--medium",
                                "sr-tag--medium-low", "sr-tag--low") for c in classes):
@@ -2534,8 +2682,21 @@ class HtmlToWordExporter:
                 return
             titles = getattr(self, "_snapshot_titles", {}) or {}
             chart_title = (titles.get(snap) or "").strip()
+            chart_ids = getattr(self, "_snapshot_chart_ids", {}) or {}
+            chart_id = (chart_ids.get(snap) or "").strip()
+            # 这 2 个图缩小 50% 居中（用户要求）
+            # 注：3.2.3 的 m2-ring2 / m2-bar-sys 已合成一张图整体展示，不再独立出现
+            shrink_ids = {"m3-web-top5-bar", "m3-nonweb-top5-bar"}
+            should_shrink = chart_id in shrink_ids
+            # 标题保留在图里的 snap：不写图前小标题（标题已在图里），但仍写图后 caption
+            keep_title_snaps = getattr(self, "_snapshot_keep_title", set()) or set()
+            skip_inline_title = snap in keep_title_snaps
+            # grid-2 合成图的特殊图注（如 3.3.1 Web/非Web top5 合成图）
+            grid_captions = getattr(self, "_snapshot_grid_captions", {}) or {}
+            grid_caption = (grid_captions.get(snap) or "").strip()
             # 图前：写小标题（沿用 HTML .chart-title 视觉：左对齐、加粗、11pt）
-            if chart_title:
+            # 跳过条件：标题保留在图里 / grid-2 合成图（标题已在图里）
+            if chart_title and not skip_inline_title and not grid_caption:
                 title_p = container.add_paragraph()
                 title_p.paragraph_format.space_before = Pt(4)
                 title_p.paragraph_format.space_after = Pt(2)
@@ -2544,7 +2705,19 @@ class HtmlToWordExporter:
                 t_run.font.size = Pt(11)
                 t_run.font.color.rgb = RGBColor.from_string("1A1F36")
             w, h = self._fit_image_size(img_path)
-            if w is None or h is None:
+            if should_shrink:
+                # 缩小 50%：宽度减半
+                if w is None or h is None:
+                    content_w = self.config["docx"]["page_width_mm"] - 2 * self.config["docx"]["margin_mm"]
+                    pic_w = Mm(content_w / 2)
+                    pic_h = None
+                else:
+                    pic_w = Mm(int(w.mm / 2))
+                    pic_h = Mm(int(h.mm / 2))
+                pic_p = container.add_picture(img_path, width=pic_w, height=pic_h)
+                # 居中
+                pic_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            elif w is None or h is None:
                 content_w = self.config["docx"]["page_width_mm"] - 2 * self.config["docx"]["margin_mm"]
                 pic_p = container.add_picture(img_path, width=Mm(content_w))
             else:
@@ -2554,7 +2727,20 @@ class HtmlToWordExporter:
                 pic_p.paragraph_format.space_before = Pt(0)
                 pic_p.paragraph_format.space_after = Pt(0)
             # 图后：居中"图 N-M 标题"形式的命名段（编号按图出现顺序自增）
-            if chart_title:
+            # grid-2 合成图：用 grid_caption 作为图注文字（无图前小标题）
+            # no_caption 集：完全跳过图后 caption（标题已在图里，且不希望加图注）
+            no_caption_snaps = getattr(self, "_snapshot_no_caption", set()) or set()
+            skip_caption = snap in no_caption_snaps
+            if grid_caption and not skip_caption:
+                self._chart_caption_index = getattr(self, "_chart_caption_index", 0) + 1
+                caption_p = container.add_paragraph()
+                caption_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                caption_p.paragraph_format.space_before = Pt(2)
+                caption_p.paragraph_format.space_after = Pt(0)
+                c_run = caption_p.add_run(f"图 {self._chart_caption_index} {grid_caption}")
+                c_run.font.size = Pt(9)
+                c_run.font.color.rgb = RGBColor.from_string("6F7785")
+            elif chart_title and not skip_caption:
                 self._chart_caption_index = getattr(self, "_chart_caption_index", 0) + 1
                 caption_p = container.add_paragraph()
                 caption_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -3029,10 +3215,18 @@ class HtmlToWordExporter:
                                "sr-tag--critical", "sr-tag--high", "sr-tag--medium",
                                "sr-tag--medium-low", "sr-tag--low") for c in child_classes):
                     # 深色 tag 系列：作为带底色 inline run
-                    if current_text:
-                        parts.append(("text", "".join(current_text), None))
-                        current_text = []
-                    parts.append(("tag_dark", child, None))
+                    # 4.5 节风险等级表格 cell：按文字（严重/高危/中危/低危）直接映射 HTML 圆点色
+                    cell_text = child.get_text(" ", strip=True)
+                    if cell_text in ("严重", "高危", "中危", "低危"):
+                        if current_text:
+                            parts.append(("text", "".join(current_text), None))
+                            current_text = []
+                        parts.append(("risk_level_text", cell_text, None))
+                    else:
+                        if current_text:
+                            parts.append(("text", "".join(current_text), None))
+                            current_text = []
+                        parts.append(("tag_dark", child, None))
                 else:
                     # 其他 span/容器标签：递归提取，保留嵌套 strong/b/em/i 的 bold/italic 语义
                     self._collect_inline_parts(child, current_text, parts, None)
@@ -3084,6 +3278,26 @@ class HtmlToWordExporter:
                     run.bold = True
                     run.font.color.rgb = RGBColor.from_string(fg)
                     self._set_run_shading(run, bg)
+            elif ptype == "risk_level_text":
+                # 4.5 节风险等级文字（严重/高危/中危/低危）按 HTML 圆点对应色固定上底纹
+                # 文字固定 → 直接按文字映射颜色，不依赖 sr-tag 类检测
+                text = content
+                RISK_LEVEL_COLORS = {
+                    "严重": ("82010E", "FFFFFF"),  # --sr-critical
+                    "高危": ("CF171D", "FFFFFF"),  # --sr-danger
+                    "中危": ("FDAA1D", "5A3D00"),  # --sr-caution-dot + 深棕字（白字对比度不足）
+                    "低危": ("6B7A99", "FFFFFF"),  # --sr-text-secondary
+                }
+                if text in RISK_LEVEL_COLORS:
+                    bg, fg = RISK_LEVEL_COLORS[text]
+                    run = paragraph.add_run(f" {text} ")
+                    run.bold = True
+                    run.font.color.rgb = RGBColor.from_string(fg)
+                    self._set_run_shading(run, bg)
+                else:
+                    # 非风险等级文字，按普通文本写入
+                    run = paragraph.add_run(text)
+                    run.bold = False
 
     def _render_component_name_row(self, paragraph, div_node):
         """渲染组件名称行：组件名称（默认字号、加粗、黑色）+ 类型（括号形式、灰色小字）
@@ -3190,12 +3404,29 @@ class HtmlToWordExporter:
 
     def run(self):
         """编排：load_config → render_html → snapshot → extract_dom → assemble_docx。"""
+        t_total = time.perf_counter()
         try:
+            t0 = time.perf_counter()
             self.load_config()
+            _log(f"[耗时] load_config: {(time.perf_counter() - t0) * 1000:.0f} ms")
+
+            t0 = time.perf_counter()
             page = self.render_html()
+            _log(f"[耗时] render_html: {(time.perf_counter() - t0) * 1000:.0f} ms")
+
+            t0 = time.perf_counter()
             snapshot_map = self.snapshot_complex_components(page)
+            _log(f"[耗时] snapshot_complex_components: {(time.perf_counter() - t0) * 1000:.0f} ms ({len(snapshot_map)} 张图)")
+
+            t0 = time.perf_counter()
             root = self.extract_dom(page)
+            _log(f"[耗时] extract_dom: {(time.perf_counter() - t0) * 1000:.0f} ms")
+
+            t0 = time.perf_counter()
             self.assemble_docx(root, snapshot_map, self.output_path)
+            _log(f"[耗时] assemble_docx: {(time.perf_counter() - t0) * 1000:.0f} ms")
+
+            _log(f"[总耗时] Word 导出完成: {(time.perf_counter() - t_total) * 1000:.0f} ms")
             _log(f"转换完成: {self.output_path}")
         finally:
             self.close()

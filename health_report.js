@@ -3,6 +3,20 @@
 
 const path = require('path');
 const fs = require('fs/promises');
+
+// 阶段耗时打印辅助：包裹一个 async 函数，打印开始/结束及耗时（ms）
+async function timedPhase(name, fn) {
+  const t0 = Date.now();
+  console.log(`[耗时] >>> ${name} 开始`);
+  try {
+    const r = await fn();
+    console.log(`[耗时] <<< ${name} 完成，耗时 ${Date.now() - t0} ms`);
+    return r;
+  } catch (err) {
+    console.log(`[耗时] !!! ${name} 失败，耗时 ${Date.now() - t0} ms`);
+    throw err;
+  }
+}
 const { parseArgs, requireArgs } = require('./src/args');
 const { collectReportData, recalcThreatPreventionRiskCount } = require('./src/data_client');
 const { summarizeAssetTable, summarizeDeviceComponents } = require('./src/asset_excel_stats');
@@ -25,7 +39,6 @@ async function main() {
   }
 
   const reportGeneratedAt = new Date();
-
   // 统一查一次 customerId（只接受 --customer 自动查）
   let customerId = '';
   let msswCookie = null;
@@ -42,13 +55,13 @@ async function main() {
   if (command && command !== 'generate') {
     if (command === 'mssw-asset-export') {
       requireArgs(options, ['mssw-cookie-path', 'customer-id']);
-      const result = await exportMsswAssetList({
+      const result = await timedPhase('MSSW 资产表分页导出', () => exportMsswAssetList({
         msswCookiePath: options['mssw-cookie-path'],
         msswBaseUrl: options['mssw-base-url'],
         downloadDir: options['download-dir'],
         customerId: options['customer-id'],
         logger
-      });
+      }));
       outputResult(result, emitJson, logger, `MSSW 资产表已导出: ${result.filePath}`);
       return;
     }
@@ -71,12 +84,13 @@ async function main() {
     await readXdrCookieInfo(options['xdr-cookie-path']);
   }
 
-  await exportMsswDeviceList({
+  const __main_t0 = Date.now();
+  await timedPhase('MSSW 设备列表导出', () => exportMsswDeviceList({
     msswCookiePath: options['mssw-cookie-path'],
     msswBaseUrl: options['mssw-base-url'],
     customerId,
     logger
-  });
+  }));
 
   const effectiveTimeRange = await resolveEffectiveTimeRange({
     options,
@@ -94,7 +108,7 @@ async function main() {
 
   logger(`开始生成: ${options.customer} ${effectiveTimeRange.start} ~ ${effectiveTimeRange.end}`);
 
-  const tableExports = await exportConfiguredXdrTables({
+  const tableExports = await timedPhase('MSSW XDR 表导出', () => exportConfiguredXdrTables({
     xdrCookiePath: options['xdr-cookie-path'],
     msswCookiePath: options['mssw-cookie-path'],
     msswBaseUrl: options['mssw-base-url'],
@@ -108,7 +122,7 @@ async function main() {
     pollIntervalMs: options['poll-interval-ms'] ? Number(options['poll-interval-ms']) : undefined,
     mock: options.mock === true || options.mock === 'true',
     logger
-  });
+  }));
   if (Object.keys(tableExports).length) {
     logger(`MSSW 导表完成: ${Object.keys(tableExports).join(', ')}`);
   } else {
@@ -178,7 +192,7 @@ async function main() {
     }
   }
 
-  let reportData = await collectReportData({
+  let reportData = await timedPhase('收集报告数据 collectReportData', () => collectReportData({
     customer: options.customer,
     customerId,
     start: effectiveTimeRange.start,
@@ -193,7 +207,7 @@ async function main() {
     assetFilePath: resolvedAssetFilePath || undefined,
     exploitIncidentIds: exploitStats && Array.isArray(exploitStats.incidentIds) ? exploitStats.incidentIds : [],
     logger
-  });
+  }));
 
   // 合并漏洞利用统计到报告数据
   if (exploitStats) {
@@ -351,7 +365,7 @@ async function main() {
     Object.assign(reportData, preventionData);
     logger('威胁预防 JSON 已合并到 report-data');
 
-    branch1Result = await runBranch1ReportStage({
+    branch1Result = await timedPhase('分支1 报告阶段 runBranch1ReportStage', () => runBranch1ReportStage({
       customer: options.customer,
       companyId: customerId,
       start: effectiveTimeRange.start,
@@ -365,7 +379,7 @@ async function main() {
       msswCookiePath: options['mssw-cookie-path'],
       outputDir: path.join(root, 'tmp'),
       mock: options.mock === true || options.mock === 'true'
-    });
+    }));
     reportData = mergeBranch1ReportPatch(reportData, branch1Result.reportPatch);
     logger('分支1 JSON 已合并到 report-data');
 
@@ -394,7 +408,7 @@ async function main() {
       logger(`删除事件表敏感列失败（不阻断主流程）: ${error.message}`);
     }
 
-    const archivedFiles = await archiveRiskListFiles({
+    const archivedFiles = await timedPhase('归档风险清单 archiveRiskListFiles', () => archiveRiskListFiles({
       root,
       incidentPath: incidentFilePath,
       assetPath: resolvedAssetFilePath,
@@ -403,7 +417,7 @@ async function main() {
       vulnPath: preventionTables.vuln.filePath,
       policyCheckPath: branch1Result.artifacts.policyExcelPath,
       logger
-    });
+    }));
     if (tableExports.incident) {
       tableExports.incident.filePath = archivedFiles.incidentPath;
     }
@@ -500,7 +514,10 @@ async function main() {
   {
     const r = reportData.riskOverview || {};
     r.topRiskAssetsSectionHide = !Array.isArray(r.topRiskAssets) || r.topRiskAssets.length === 0;
-    logger(`3.2 风险资产 TOP5 章节隐藏标记: ${r.topRiskAssetsSectionHide}`);
+    // 2.2 节隐藏时，章节 2 末尾仍展示「综上...」精简段落（去掉「修复方案重点针对 xxx 等资产。」），
+    // 由 HTML 里独立的 fallback 段落承载，显示条件与 2.2 节隐藏相反。
+    r.topRiskAssetsSummaryFallbackHide = !r.topRiskAssetsSectionHide;
+    logger(`3.2 风险资产 TOP5 章节隐藏标记: ${r.topRiskAssetsSectionHide} (fallback 显示: ${!r.topRiskAssetsSummaryFallbackHide})`);
   }
 
   // 3.1 关键风险卡片：无数据类别不展示（通过 data-hide 机制驱动）
@@ -557,21 +574,23 @@ async function main() {
   await writeJsonFile(reportDataJsonPath, reportData);
   logger(`数据已写入: ${reportDataJsonPath}`);
 
-  const result = await renderReportToFile({
+  const result = await timedPhase('渲染 HTML 报告 renderReportToFile', () => renderReportToFile({
     templatePath,
     outputDir,
     reportData
-  });
+  }));
   logger(`HTML 已生成: ${result.html_path || result.filePath || ''}`);
 
   let wordExport = null;
   if (branch1Result) {
-    wordExport = await exportBranch1Word({
+    wordExport = await timedPhase('导出 Word 报告 exportBranch1Word', () => exportBranch1Word({
       htmlPath: result.html_path || result.filePath || '',
       wordPath: replaceExtension(result.html_path || result.filePath || '', '.docx')
-    });
+    }));
     logger(`Word 已生成: ${wordExport.wordPath}`);
   }
+
+  console.log(`[总耗时] 报告导出完成: ${Date.now() - __main_t0} ms`);
 
   outputResult({
     ...result,
