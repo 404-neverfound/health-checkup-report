@@ -861,8 +861,8 @@ function renderInternetExposureDescription(data) {
   // 风险端口数（从 2 节风险总览的 summary 取）
   const riskPorts = Number((data.summary && data.summary.internet && data.summary.internet.exposure && data.summary.internet.exposure.risk_ports) || 0);
 
-  // 新评分公式：风险端口 * 5 + 漏洞 * 35
-  const score = riskPorts * 5 + vulnCount * 35;
+  // 评分公式：1个资产或1个风险端口=5分，1个漏洞=35分
+  const score = (assetCount + riskPorts) * 5 + vulnCount * 35;
 
   // 风险等级判定（三级：良好 / 一般 / 较差）
   let level;
@@ -870,27 +870,23 @@ function renderInternetExposureDescription(data) {
   else if (score <= 70) level = '一般';
   else level = '较差';
 
-  // 情况 1 [0, 30] 特殊分支：资产、端口、风险端口、漏洞都为 0
-  //   正常数据流下 portCount=0 已隐含 riskPorts=0、score≤30 已隐含 vulnCount=0，
-  //   此处显式列出 4 个字段是为了防御脏数据 + 让判断条件与话术语义自洽
-  if (score <= 30 && assetCount === 0 && portCount === 0 && riskPorts === 0 && vulnCount === 0) {
-    return paragraph('互联网业务风险良好，未发现对外暴露的端口与服务，未发现互联网漏洞。');
+  // 分支 1：0 资产 且 0 端口
+  if (assetCount === 0 && portCount === 0) {
+    if (vulnCount === 0) {
+      // 子分支 1a：全为 0，score=0 → 等级必然为"良好"
+      return paragraph('互联网业务风险良好，没有发现风险暴露面和互联网漏洞。');
+    } else {
+      // 子分支 1b：0 资产 0 端口 X 漏洞，XX 按 score 算
+      return paragraph(`互联网业务风险${level}，存在${vulnCount}个互联网漏洞。`);
+    }
   }
 
-  // 情况 1 [0, 30]：有资产或端口 > 0，末句固定"未发现互联网漏洞"
-  if (score <= 30) {
-    return paragraph(
-      `互联网业务风险${level}，存在一些对外暴露的端口与服务。` +
-      `其中有 <strong>${assetCount}</strong> 个资产暴露了 <strong>${portCount}</strong> 个端口` +
-      `（风险端口<strong>${riskPorts}</strong>个），未发现互联网漏洞。`
-    );
-  }
-
-  // 情况 2 (30, 70] 和 情况 3 > 70：末句固定"存在 N 个互联网漏洞"
+  // 分支 2：X 资产 或 X 端口（默认场景），XX 按 score 算
+  // 末句统一"存在 V 个互联网漏洞"，不再按 score 区分表述
   return paragraph(
     `互联网业务风险${level}，存在一些对外暴露的端口与服务。` +
-    `其中有 <strong>${assetCount}</strong> 个资产暴露了 <strong>${portCount}</strong> 个端口` +
-    `（风险端口<strong>${riskPorts}</strong>个），存在 <strong>${vulnCount}</strong> 个互联网漏洞。`
+    `其中有<strong>${assetCount}</strong>个资产暴露了<strong>${portCount}</strong>个端口` +
+    `（风险端口<strong>${riskPorts}</strong>个），存在<strong>${vulnCount}</strong>个互联网漏洞。`
   );
 }
 
