@@ -1862,11 +1862,11 @@ async function fetchMsswAssetReadyToOutbound(cookieInfo, msswBaseUrl, companyId)
   return response;
 }
 
-// 拉取资产总数（search_type=current），用于在导出前判断是否需要走分页兜底
-async function fetchMsswAssetTotalCount(cookieInfo, msswBaseUrl, companyId) {
+// 拉取资产总数（search_type=current 或 wait_approve），用于在导出前判断是否需要走分页兜底
+async function fetchMsswAssetTotalCount(cookieInfo, msswBaseUrl, companyId, searchType = 'current') {
   const headers = buildMsswExportHeaders(cookieInfo, msswBaseUrl, companyId);
   const url = `https://${normalizeBaseUrl(msswBaseUrl || DEFAULT_MSSW_BASE_URL)}${MSSW_ASSET_COUNT_ENDPOINT}`;
-  const body = JSON.stringify({ branch_id: 'all', search_type: 'current', start: 0, limit: 20 });
+  const body = JSON.stringify({ branch_id: 'all', search_type: searchType, start: 0, limit: 20 });
   headers['content-length'] = String(Buffer.byteLength(body));
   const response = await requestJson(url, { headers, body, timeout: 30000 });
   if (!response || response.success !== true && response.code !== 0 && response.code !== '0') {
@@ -2349,8 +2349,10 @@ async function exportMsswAssetList(options) {
 
   if (!DISABLE_PAGED_EXPORT && !assetIds.length) {
     try {
-      preCheckedTotal = await fetchMsswAssetTotalCount(cookieInfo, msswBaseUrl, companyId);
-      logInfo(logger, `资产台账总数（接口预查）: ${preCheckedTotal}`);
+      const currentTotal = await fetchMsswAssetTotalCount(cookieInfo, msswBaseUrl, companyId, 'current');
+      const waitApproveTotal = await fetchMsswAssetTotalCount(cookieInfo, msswBaseUrl, companyId, 'wait_approve');
+      preCheckedTotal = Math.max(currentTotal, waitApproveTotal);
+      logInfo(logger, `资产总数（接口预查）: 资产台账 ${currentTotal}，待审核 ${waitApproveTotal}，取最大值 ${preCheckedTotal} 作为分页阈值判断依据`);
     } catch (error) {
       logInfo(logger, `资产总数预查失败（继续走默认导出 + 超时兜底）: ${error.message}`);
       preCheckedTotal = null;

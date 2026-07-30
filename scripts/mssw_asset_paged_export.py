@@ -325,6 +325,9 @@ def collect_all_ids(base_url, headers, search_type, list_page_size, list_concurr
         return no, 0, last_err
 
     failed_pages = []
+    # 分页拉取日志步长：每 LOG_STEP 页打印一次进度，最后一页/失败时也打印
+    LOG_STEP = 20
+    log_progress(f'[ids] {search_type} 已提交 {len(pages)} 页到 ids 线程池 (workers={list_concurrency})，等待首批响应...')
     with ThreadPoolExecutor(max_workers=list_concurrency) as executor:
         futures = [executor.submit(fetch_one_page, p) for p in pages]
         completed = 0
@@ -334,8 +337,11 @@ def collect_all_ids(base_url, headers, search_type, list_page_size, list_concurr
                 completed += 1
                 if err is not None:
                     failed_pages.append((no, err))
-                else:
-                    log_progress(f'[ids] {search_type} page={no} fetched ids={cnt} completed={completed}/{len(pages)}')
+                    # 失败时立即打印（不论步长）
+                    log_progress(f'[ids] {search_type} page={no} fetched ids={cnt} completed={completed}/{len(pages)} [FAILED: {str(err)[:80]}]')
+                elif completed % LOG_STEP == 0 or completed == len(pages):
+                    # 每 LOG_STEP 页 或 最后一页 打印进度
+                    log_progress(f'[ids] {search_type} ids 拉取进度: 累计 {completed}/{len(pages)} 页')
             except Exception as e:
                 log_progress(f'[ids] {search_type} 页拉取异常: {e}')
 
@@ -459,6 +465,7 @@ def merge_xlsx_batches(batch_files, output_path, log_progress):
 
     header_written = False
     total_rows = 0
+    MERGE_LOG_STEP = 20  # merge 进度日志步长：每 MERGE_LOG_STEP 批次打印一次
 
     for idx, batch_path in enumerate(batch_files_sorted):
         try:
@@ -490,7 +497,7 @@ def merge_xlsx_batches(batch_files, output_path, log_progress):
                     pass
             header_written = True
             total_rows -= 1  # 减去表头
-            log_progress(f'[merge] 批次 {idx + 1}/{len(batch_files_sorted)}: 写入表头 + 数据, 累计 {total_rows} 行')
+            log_progress(f'[merge] 首批表头 + 数据写入完成, 累计 {total_rows} 行')
         else:
             # 后续批次：只 append 值，跳过前 2 行（空 + 表头）
             skipped = 0
@@ -500,7 +507,10 @@ def merge_xlsx_batches(batch_files, output_path, log_progress):
                     continue
                 ws_out.append(list(row))
                 total_rows += 1
-            log_progress(f'[merge] 批次 {idx + 1}/{len(batch_files_sorted)}: 追加数据, 累计 {total_rows} 行')
+            # merge 进度：每 MERGE_LOG_STEP 批或最后一批才打印，避免日志过多
+            done_batches = idx + 1
+            if done_batches % MERGE_LOG_STEP == 0 or done_batches == len(batch_files_sorted):
+                log_progress(f'[merge] 进度: 累计 {done_batches}/{len(batch_files_sorted)} 批, {total_rows} 行')
         wb.close()
 
     wb_out.save(output_path)
@@ -511,6 +521,17 @@ def merge_xlsx_batches(batch_files, output_path, log_progress):
 # ----------------- 单 search_type 完整流程（生产者-消费者） -----------------
 
 def export_search_type(base_url, headers, search_type, output_dir, batch_size, list_page_size, concurrency, list_concurrency, keep_temp, use_cache, log_progress, company_id):
+    __stage_t0 = time.time()
+    log_progress(f'[耗时] >>> {search_type} 资产清单分页导出开始')
+    try:
+        return __export_search_type_impl(base_url, headers, search_type, output_dir, batch_size, list_page_size, concurrency, list_concurrency, keep_temp, use_cache, log_progress, company_id, __stage_t0)
+    except Exception:
+        log_progress(f'[耗时] !!! {search_type} 资产清单分页导出失败，耗时 {time.time() - __stage_t0:.1f}s')
+        raise
+
+
+def __export_search_type_impl(base_url, headers, search_type, output_dir, batch_size, list_page_size, concurrency, list_concurrency, keep_temp, use_cache, log_progress, company_id, __stage_t0):
+    LOG_STEP = 20  # 分页导出进度日志步长：每 LOG_STEP 批次打印一次
     ids = collect_all_ids(base_url, headers, search_type, list_page_size, list_concurrency, log_progress, output_dir, company_id, use_cache)
     if not ids:
         ts = time.strftime('%Y%m%d%H%M%S')
@@ -527,6 +548,7 @@ def export_search_type(base_url, headers, search_type, output_dir, batch_size, l
         wb.save(empty_path)
         wb.close()
         log_progress(f'[export] {search_type} 无数据，生成仅含表头的 xlsx: {empty_path}')
+        log_progress(f'[耗时] <<< {search_type} 资产清单分页导出完成（无数据），耗时 {time.time() - __stage_t0:.1f}s')
         return empty_path
 
     total_batches = (len(ids) + batch_size - 1) // batch_size
@@ -548,6 +570,7 @@ def export_search_type(base_url, headers, search_type, output_dir, batch_size, l
     download_dead = []  # download 失败: (no, ids, filename, err)
     state_lock = threading.Lock()
     completed_count = [0]
+    export_completed_count = [0]  # export 完成数（入下载队列数）
     download_queue = queue.Queue()  # 传递 ('ready', no, ids, filename) 或 ('stop', None, None, None)
 
     def producer(batch):
@@ -580,7 +603,12 @@ def export_search_type(base_url, headers, search_type, output_dir, batch_size, l
                 export_dead.append((no, ids_chunk, last_err or RuntimeError('unknown')))
             log_progress(f'[export] {search_type} batch={no} export 失败 ({elapsed:.1f}s): {str(last_err)[:200]}')
             return
-        log_progress(f'[export] {search_type} batch={no} export 完成 ({elapsed:.1f}s)，入下载队列')
+        # export 完成入下载队列（每 LOG_STEP 批次或最后一批才打印进度，避免日志过多）
+        with state_lock:
+            export_completed_count[0] += 1
+            cnt = export_completed_count[0]
+        if cnt % LOG_STEP == 0 or cnt == total_batches:
+            log_progress(f'[export] {search_type} export 进度: 累计 {cnt}/{total_batches} 批已入下载队列')
         download_queue.put(('ready', no, ids_chunk, filename))
 
     def consumer():
@@ -626,7 +654,10 @@ def export_search_type(base_url, headers, search_type, output_dir, batch_size, l
                     download_dead.append((no, ids_chunk, filename, last_err))
                 log_progress(f'[export] {search_type} batch={no} download 失败 ({elapsed:.1f}s): {str(last_err)[:200]}')
             else:
-                log_progress(f'[export] {search_type} batch={no}/{total_batches} download 完成 ({elapsed:.1f}s), 累计 {completed_count[0]}')
+                # 下载完成：每 LOG_STEP 批或最后一批才打印进度，避免日志过多
+                cnt = completed_count[0]
+                if cnt % LOG_STEP == 0 or cnt == total_batches:
+                    log_progress(f'[export] {search_type} download 进度: 累计 {cnt}/{total_batches} 批已下载')
             download_queue.task_done()
 
     try:
@@ -638,6 +669,7 @@ def export_search_type(base_url, headers, search_type, output_dir, batch_size, l
             download_threads.append(t)
 
         # 启动 export 生产者（concurrency 路）
+        log_progress(f'[export] {search_type} 已提交 {len(batches)} 批到 export 线程池 (workers={concurrency})，等待首批响应...')
         with ThreadPoolExecutor(max_workers=concurrency) as export_executor:
             futures = [export_executor.submit(producer, b) for b in batches]
             for fut in as_completed(futures):
@@ -691,6 +723,7 @@ def export_search_type(base_url, headers, search_type, output_dir, batch_size, l
         ts = time.strftime('%Y%m%d%H%M%S')
         output_path = os.path.join(output_dir, f'Asset_Paged_{ts}_{search_type}.xlsx')
         merge_xlsx_batches(ordered_paths, output_path, log_progress)
+        log_progress(f'[耗时] <<< {search_type} 资产清单分页导出完成，耗时 {time.time() - __stage_t0:.1f}s')
         return output_path
     finally:
         if not keep_temp:
