@@ -486,7 +486,7 @@ function renderTopRiskAssetRows(rows) {
     const businessSystem = String(row.businessSystem || '').trim();
     const riskCount = Number(row.riskCount || 0);
     const detailLines = Array.isArray(row.detailLines) && row.detailLines.length
-      ? row.detailLines.map((line) => escapeHtml(String(line)))
+      ? row.detailLines.map((line) => String(line))
       : [
         businessSystem ? `所属业务：${escapeHtml(businessSystem)}` : '所属业务：暂无'
       ];
