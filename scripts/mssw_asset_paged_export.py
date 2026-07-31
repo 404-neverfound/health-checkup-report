@@ -10,6 +10,7 @@ MSSW 资产分批导出脚本（方案 B：通过 ids 分批走 export 接口）
 4) 下载每批生成的 xlsx 到临时目录
 5) 失败批次进 dead letter，主流程结束后串行重试 1 次
 6) 把所有批次 xlsx 的数据行（去掉空行 + 非首批表头）拼接到一个总 xlsx
+   保留原始 xlsx 结构：第 1 行空行 + 第 2 行表头 + 第 3 行起数据
 7) 删除中间临时批次 xlsx
 
 接口：
@@ -447,8 +448,8 @@ def merge_xlsx_batches(batch_files, output_path, log_progress):
     """合并多个 xlsx 到一个总 xlsx，保留首批批次的表头样式 + 列宽。
 
     MSSW export xlsx 固定结构：第 1 行空 + 第 2 行表头 + 第 3 行起数据。
-    合并规则（输出 xlsx 第 1 行直接是表头，无空行）：
-    - 首批：跳过第 1 行空行，第 2 行表头作为输出 xlsx 的第 1 行（连同样式 + 列宽）
+    合并规则（保留原始结构：第 1 行空行 + 第 2 行表头 + 第 3 行起数据）：
+    - 首批：第 1 行空行 + 第 2 行表头 + 第 3 行起数据 全部保留（连同样式 + 列宽 + 行高）
     - 后续批次：跳过前 2 行（空行 + 表头），只追加数据（不复制样式以节省内存）
 
     使用普通模式（非 write_only）以支持表头样式保留。数据行仅 append 值，
@@ -477,29 +478,29 @@ def merge_xlsx_batches(batch_files, output_path, log_progress):
         ws = wb.active
 
         if not header_written:
-            # 首批：跳过第 1 行空行，第 2 行表头作为输出 xlsx 的第 1 行（保留样式 + 列宽）
+            # 首批：保留原始 xlsx 结构（第 1 行空行 + 第 2 行表头 + 第 3 行起数据）
             _copy_column_widths(ws, ws_out)
             out_row_idx = 0
             for row_idx, row in enumerate(ws.iter_rows(values_only=False), start=1):
-                if row_idx == 1:
-                    # 跳过空行
-                    continue
+                # row_idx=1: 写入空行（仅复制样式，不写值）
+                # row_idx=2: 写入表头（保留样式 + 列宽 + 行高）
+                # row_idx>=3: 写入数据（保留样式）
                 out_row_idx += 1
                 for col_idx, cell in enumerate(row, start=1):
                     out_cell = ws_out.cell(row=out_row_idx, column=col_idx, value=cell.value)
                     _copy_cell_style(cell, out_cell)
-                if row_idx == 2:
+                if row_idx == 1:
+                    # 空行：复制行高
+                    _copy_row_dimensions(ws, ws_out, row_idx)
+                elif row_idx == 2:
                     # 表头行额外复制行高
                     _copy_row_dimensions(ws, ws_out, row_idx)
                 total_rows += 1
-                if row_idx >= 2:
-                    # 首批已写入表头 + 数据，继续读完所有数据
-                    pass
             header_written = True
-            total_rows -= 1  # 减去表头
-            log_progress(f'[merge] 首批表头 + 数据写入完成, 累计 {total_rows} 行')
+            total_rows -= 2  # 减去空行 + 表头
+            log_progress(f'[merge] 首批空行 + 表头 + 数据写入完成, 累计 {total_rows} 行')
         else:
-            # 后续批次：只 append 值，跳过前 2 行（空 + 表头）
+            # 后续批次：只 append 值，跳过前 2 行（空行 + 表头）
             skipped = 0
             for row in ws.iter_rows(values_only=True):
                 if skipped < 2:
@@ -544,7 +545,9 @@ def __export_search_type_impl(base_url, headers, search_type, output_dir, batch_
             for field in DEFAULT_EXPORT_FIELDS.get(group, []):
                 if field.get('selected'):
                     header_row.append(field.get('label', ''))
-        ws.append(header_row)
+        # 保留原始 xlsx 结构：第 1 行空行 + 第 2 行表头
+        ws.append([None] * len(header_row))  # 第 1 行空行
+        ws.append(header_row)  # 第 2 行表头
         wb.save(empty_path)
         wb.close()
         log_progress(f'[export] {search_type} 无数据，生成仅含表头的 xlsx: {empty_path}')

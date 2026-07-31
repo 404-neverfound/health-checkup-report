@@ -2408,6 +2408,12 @@ class HtmlToWordExporter:
                     run.font.color.rgb = RGBColor.from_string(color)
                 except Exception:
                     pass
+            size = fmt.get("size")
+            if size is not None:
+                try:
+                    run.font.size = Pt(size)
+                except Exception:
+                    pass
 
     def _render_grade_badge_inline(self, paragraph, node):
         """将 <span class="sr-grade sr-grade--良">良</span> 作为 inline run 渲染：
@@ -3175,6 +3181,16 @@ class HtmlToWordExporter:
                     parts.append(("text", "".join(current_text), None))
                     parts.append(("top5_asset_ip_row", child, None))
                     current_text = []
+                    continue
+                if "sr-top5-asset-biz" in classes:
+                    # 业务资产组名称：在 IP 行下方另起一行（软换行）展示
+                    biz_text = child.get_text(" ", strip=True)
+                    if biz_text:
+                        parts.append(("text", "".join(current_text), None))
+                        parts.append(("br", None, None))  # IP 行后换行
+                        # 业务名用 9pt 灰色小字（对应 HTML .sr-top5-asset-biz 视觉）
+                        parts.append(("text", biz_text, {"color": "6B7A99", "size": 9}))
+                        current_text = []
                     continue
                 # 块级标签：先把累计文本 flush，再提取块文本
                 parts.append(("text", "".join(current_text), None))
