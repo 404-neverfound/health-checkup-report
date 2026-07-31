@@ -9,8 +9,8 @@ description: 生成指定客户、指定时间段的安全体检报告。时间�
 
 ## 前置条件
 
-- MSS Cookie: `M:\Users\$env:USERNAME\Downloads\cookies.txt`
-- XDR Cookie: `M:\Users\$env:USERNAME\Downloads\xdr_cookies.txt`
+- SOAR Cookie: `M:\Users\$env:USERNAME\Downloads\cookies.txt`
+- MSSW Cookie: `M:\Users\$env:USERNAME\Downloads\mssw_cookies.txt`
 - 当前项目使用 Node.js 18+
 
 ## 命令
@@ -20,21 +20,16 @@ node "$HOME\.openclaw\workspace\skills\health-checkup-report\health_report.js" `
   --customer "<客户名>" `
   --af "<true|false>" `
   --sip "<true|false>" `
-  --mssw-cookie-path "M:\Users\$env:USERNAME\Downloads\cookies.txt" `
-  --xdr-cookie-path "M:\Users\$env:USERNAME\Downloads\xdr_cookies.txt"
+  --mssw-cookie-path "M:\Users\$env:USERNAME\Downloads\mssw_cookies.txt" `
+  --cookie-path "M:\Users\$env:USERNAME\Downloads\cookies.txt"
+  --mssw-base-url "sitmssw.soar.sangfor.com.cn" `
+  --soar-base-url "testsoar.sangfor.com.cn"
 ```
 
 - `--af`：客户是否已开通**防火墙云情报网关**订阅（true/false，必填）
 - `--sip`：客户是否已开通 **SIP 云端情报检测**（true/false，必填）
 
 主文件会结合接口查到的 AF / SIP 设备数量综合判断：即使参数为 true，但对应设备数量为 0，仍按"没有设备"处理，话术会引导购买设备。
-
-骨架开发阶段可使用 mock：
-
-```powershell
-node "$HOME\.openclaw\workspace\skills\health-checkup-report\health_report.js" `
-  --customer "<客户名>" --af true --sip true
-```
 
 如需显式指定时间，`--start` 和 `--end` 必须同时传入。**查询时间范围最大 30 天**，超出会报错提示用户缩小范围。
 
