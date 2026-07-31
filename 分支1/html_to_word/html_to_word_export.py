@@ -2367,11 +2367,16 @@ class HtmlToWordExporter:
             self._strip_paragraph_num_pr(p)
 
     def _apply_text_indent(self, node, paragraph, container):
-        """从 node 的 style="text-indent:Nem" 解析首行缩进，1em 近似按当前字号 10.5pt 计算。"""
+        """从 node 的 style 中解析 text-indent:Nem 和 margin-top:Npx，设 Word 首行缩进和段前间距。"""
         style = node.get("style") if isinstance(node, Tag) else None
         if not style:
             return
-        m = re.search(r"text-indent\s*:\s*([\d.]+)\s*em", style)
+        # 解析 margin-top 作为 Word space_before（1px ≈ 0.75pt）
+        m = re.search(r'margin-top\s*:\s*([\d.]+)px', style)
+        if m:
+            px = float(m.group(1))
+            paragraph.paragraph_format.space_before = Pt(round(px * 0.75, 1))
+        m = re.search(r'text-indent\s*:\s*([\d.]+)\s*em', style)
         if not m:
             return
         em = float(m.group(1))
@@ -2408,6 +2413,12 @@ class HtmlToWordExporter:
                     run.font.color.rgb = RGBColor.from_string(color)
                 except Exception:
                     pass
+            size = fmt.get("size")
+            if size is not None:
+                try:
+                    run.font.size = Pt(size)
+                except Exception:
+                    pass
 
     def _render_grade_badge_inline(self, paragraph, node):
         """将 <span class="sr-grade sr-grade--良">良</span> 作为 inline run 渲染：
@@ -2423,7 +2434,7 @@ class HtmlToWordExporter:
         # 徽章前后留一个空格模拟 HTML 的 padding:2px 10px
         run = paragraph.add_run(f" {text} ")
         run.bold = True
-        run.font.size = Pt(9)
+        run.font.size = Pt(10.5)
         run.font.color.rgb = RGBColor.from_string(fg)
         self._set_run_shading(run, bg)
 
@@ -3176,6 +3187,16 @@ class HtmlToWordExporter:
                     parts.append(("top5_asset_ip_row", child, None))
                     current_text = []
                     continue
+                if "sr-top5-asset-biz" in classes:
+                    # 业务资产组名称：在 IP 行下方另起一行（软换行）展示
+                    biz_text = child.get_text(" ", strip=True)
+                    if biz_text:
+                        parts.append(("text", "".join(current_text), None))
+                        parts.append(("br", None, None))  # IP 行后换行
+                        # 业务名用 9pt 灰色小字（对应 HTML .sr-top5-asset-biz 视觉）
+                        parts.append(("text", biz_text, {"color": "6B7A99", "size": 9}))
+                        current_text = []
+                    continue
                 # 块级标签：先把累计文本 flush，再提取块文本
                 parts.append(("text", "".join(current_text), None))
                 parts.append(("text", child.get_text(" ", strip=True), None))
@@ -3257,13 +3278,26 @@ class HtmlToWordExporter:
             elif ptype == "grade_badge":
                 self._render_grade_badge_inline(paragraph, content)
             elif ptype == "tag_light":
-                # 浅底深字标签：EDF1F7 底 + 1A1F36 字 + 9pt
                 text = content.get_text(" ", strip=True)
                 if text:
+                    _light_colors = {
+                        "sr-tag--high":       ("FAE8E8", "CF171D"),
+                        "sr-tag--warning":    ("FFF1E8", "FA721B"),
+                        "sr-tag--success":    ("E7F6F2", "12A679"),
+                        "sr-tag--medium":     ("FBF3E7", "D6860D"),
+                        "sr-tag--medium-low": ("FBF3E7", "D6860D"),
+                        "sr-tag--info":       ("E7F6F8", "0BA7B5"),
+                    }
+                    tag_classes = content.get("class") or []
+                    bg, fg = "EDF1F7", "1A1F36"
+                    for cls in tag_classes:
+                        if cls in _light_colors:
+                            bg, fg = _light_colors[cls]
+                            break
                     run = paragraph.add_run(f" {text} ")
                     run.font.size = Pt(9)
-                    run.font.color.rgb = RGBColor.from_string("1A1F36")
-                    self._set_run_shading(run, "EDF1F7")
+                    run.font.color.rgb = RGBColor.from_string(fg)
+                    self._set_run_shading(run, bg)
             elif ptype == "tag_dark":
                 # 深底白字标签：根据 sr-tag--xxx 取对应色
                 classes = content.get("class", []) or []
