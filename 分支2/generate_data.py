@@ -95,6 +95,15 @@ def filter_count(rows, field, value):
     return sum(1 for r in rows if s(r.get(field)) == value)
 
 
+def filter_count_exploitable(rows, level):
+    """统计某风险等级下，威胁标签含'高可利用'的行数"""
+    return sum(
+        1 for r in rows
+        if s(r.get("风险等级")) == level
+        and "高可利用" in s(r.get("威胁标签", ""))
+    )
+
+
 def filter_count_multi(rows, field, values):
     """统计某字段 in values 的行数"""
     return sum(1 for r in rows if s(r.get(field)) in values)
@@ -589,19 +598,24 @@ def calc_internet_weak_pwd(ds):
 
 def calc_intranet_vuln(ds):
     """计算 data["intranet"]["vuln"] 全部字段"""
+    vi = ds["vuln_intra"]
     return {
-        "total":            len(ds["vuln_intra"]),
-        "critical":         filter_count(ds["vuln_intra"], "风险等级", "严重"),
-        "high":             filter_count(ds["vuln_intra"], "风险等级", "高危"),
-        "medium":           filter_count(ds["vuln_intra"], "风险等级", "中危"),
-        "low":              filter_count(ds["vuln_intra"], "风险等级", "低危"),
-        "related_biz":      biz_unique_count(ds["vuln_intra"], "所属业务"),
-        "related_assets":   unique_count(ds["vuln_intra"], "风险资产"),
-        "priority_urgent":  filter_count(ds["vuln_intra"], "修复优先级", "急需修复"),
-        "priority_soon":    filter_count(ds["vuln_intra"], "修复优先级", "尽快修复"),
-        "priority_suggest": filter_count(ds["vuln_intra"], "修复优先级", "建议修复"),
-        "biz_top_rows":     top_priority_rows_for_biz(ds["vuln_intra"]),
-        "asset_top_rows":   top_priority_rows(ds["vuln_intra"], "风险资产"),
+        "total":                len(vi),
+        "critical":             filter_count(vi, "风险等级", "严重"),
+        "high":                 filter_count(vi, "风险等级", "高危"),
+        "medium":               filter_count(vi, "风险等级", "中危"),
+        "low":                  filter_count(vi, "风险等级", "低危"),
+        "critical_exploitable": filter_count_exploitable(vi, "严重"),
+        "high_exploitable":     filter_count_exploitable(vi, "高危"),
+        "medium_exploitable":   filter_count_exploitable(vi, "中危"),
+        "low_exploitable":      filter_count_exploitable(vi, "低危"),
+        "related_biz":          biz_unique_count(vi, "所属业务"),
+        "related_assets":       unique_count(vi, "风险资产"),
+        "priority_urgent":      filter_count(vi, "修复优先级", "急需修复"),
+        "priority_soon":        filter_count(vi, "修复优先级", "尽快修复"),
+        "priority_suggest":     filter_count(vi, "修复优先级", "建议修复"),
+        "biz_top_rows":         top_priority_rows_for_biz(vi),
+        "asset_top_rows":       top_priority_rows(vi, "风险资产"),
     }
 
 
