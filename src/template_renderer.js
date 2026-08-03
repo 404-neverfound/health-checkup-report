@@ -887,10 +887,11 @@ function renderInternetExposureDescription(data) {
 
   // 分支 2：X 资产 或 X 端口（默认场景），XX 按 score 算
   // 末句统一"存在 V 个互联网漏洞"，不再按 score 区分表述
+  const weakPwdCount = Number((data.internet && data.internet.weak_pwd && data.internet.weak_pwd.total_count) || 0);
   return paragraph(
     `互联网业务风险${level}，存在一些对外暴露的端口与服务。` +
     `其中有<strong>${assetCount}</strong>个资产暴露了<strong>${portCount}</strong>个端口` +
-    `（风险端口<strong>${riskPorts}</strong>个），存在<strong>${vulnCount}</strong>个互联网漏洞。`
+    `（风险端口<strong>${riskPorts}</strong>个），存在<strong>${vulnCount}</strong>个互联网漏洞，存在<strong>${weakPwdCount}</strong>个弱口令。`
   );
 }
 
@@ -997,10 +998,10 @@ function renderIntranetVulnLevelDetail(data) {
   const v = (data.intranet && data.intranet.vuln) || {};
   if (!v.total) return '';
   return (
-    `（严重 <strong>${num(v.critical)}</strong> 个、` +
-    `高危 <strong>${num(v.high)}</strong> 个、` +
-    `中危 <strong>${num(v.medium)}</strong> 个、` +
-    `低危 <strong>${num(v.low)}</strong> 个）`
+    `（严重 <strong>${num(v.critical)}</strong> 个，其中可利用 <strong>${num(v.critical_exploitable)}</strong> 个；` +
+    `高危 <strong>${num(v.high)}</strong> 个，其中可利用 <strong>${num(v.high_exploitable)}</strong> 个；` +
+    `中危 <strong>${num(v.medium)}</strong> 个，其中可利用 <strong>${num(v.medium_exploitable)}</strong> 个；` +
+    `低危 <strong>${num(v.low)}</strong> 个，其中可利用 <strong>${num(v.low_exploitable)}</strong> 个）`
   );
 }
 
@@ -1034,7 +1035,7 @@ function renderIntranetVulnBizTopBlock(data) {
   return (
     '<p class="report-body sr-p">业务系统TOP 5如下：</p>\n' +
     '<table class="report-table sr-tbl" id="tbl-biz-vuln-top">' +
-    '<thead><tr><th>序号</th><th>风险资产</th><th>漏洞修复优先级</th></tr></thead>' +
+    '<thead><tr><th>序号</th><th>风险业务系统</th><th>漏洞修复优先级</th></tr></thead>' +
     `<tbody>${bizTableRows}</tbody></table>`
   );
 }

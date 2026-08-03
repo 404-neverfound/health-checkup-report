@@ -169,3 +169,13 @@ update_fields_after_save:
   timeout_sec: 60            # COM 调用整体超时（防 Word 卡死）
   fail_silently: true        # 失败时仅告警不中断主流程（保留已保存的 docx）
 
+# 页眉图片（仅正文 section 生效，封面不受影响）
+# path: PNG 文件绝对路径；留空则不添加页眉图片
+# height_mm: 图片在页眉中的高度（宽度等比缩放）
+# align: left / center / right
+header_image:
+  path: "assets/header.png"
+  height_mm: 10
+  align: left
+  header_distance_mm: 10
+

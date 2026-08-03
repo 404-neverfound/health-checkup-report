@@ -1733,7 +1733,42 @@ class HtmlToWordExporter:
         new_section.bottom_margin = m
         # 给正文 section 加居中页码页脚（封面 section 不链接，保持无页码）
         self._add_page_number_footer(new_section)
+        # 给正文 section 加页眉图片（封面 section 不链接）
+        self._add_header_image(new_section)
         return new_section
+
+    def _add_header_image(self, section):
+        """给指定 section 的 header 加页眉图片（PNG）。
+
+        配置项 header_image.path 为空时跳过。
+        align: left / center / right，默认 left。
+        """
+        cfg = self.config.get("header_image") or {}
+        path = (cfg.get("path") or "").strip()
+        if not path:
+            return
+        from pathlib import Path as _Path
+        img_path = _Path(path)
+        if not img_path.is_absolute():
+            img_path = _Path(__file__).resolve().parent / img_path
+        if not img_path.exists():
+            _log(f"页眉图片文件不存在，跳过: {path}", "WARNING")
+            return
+        height_mm = float(cfg.get("height_mm") or 10)
+        align_str = str(cfg.get("align") or "left").lower()
+        align_map = {"left": WD_ALIGN_PARAGRAPH.LEFT,
+                     "center": WD_ALIGN_PARAGRAPH.CENTER,
+                     "right": WD_ALIGN_PARAGRAPH.RIGHT}
+        align = align_map.get(align_str, WD_ALIGN_PARAGRAPH.LEFT)
+
+        header = section.header
+        header.is_linked_to_previous = False
+        section.header_distance = Mm(float(cfg.get("header_distance_mm") or 12.7))
+        p = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
+        p.clear()
+        p.alignment = align
+        run = p.add_run()
+        run.add_picture(str(img_path), height=Mm(height_mm))
 
     def _add_page_number_footer(self, section):
         """给指定 section 的 footer 加居中页码（PAGE / NUMPAGES 域），
@@ -2862,6 +2897,27 @@ class HtmlToWordExporter:
                 ci += colspan
         self._set_table_column_widths_by_grid(table, grid, node)
         self._set_table_borders(table)
+        # 仅局部：sr-top5-tbl（2.2节 TOP5风险资产表）左对齐 + 2mm缩进，与HTML对齐一致
+        if "sr-top5-tbl" in node_classes:
+            try:
+                tbl = table._tbl
+                tblPr = tbl.find(qn('w:tblPr'))
+                if tblPr is None:
+                    tblPr = OxmlElement('w:tblPr')
+                    tbl.insert(0, tblPr)
+                for tag in ('w:jc', 'w:tblInd'):
+                    old = tblPr.find(qn(tag))
+                    if old is not None:
+                        tblPr.remove(old)
+                jc = OxmlElement('w:jc')
+                jc.set(qn('w:val'), 'left')
+                tblPr.append(jc)
+                tblInd = OxmlElement('w:tblInd')
+                tblInd.set(qn('w:w'), str(int(Mm(2).twips)))
+                tblInd.set(qn('w:type'), 'dxa')
+                tblPr.append(tblInd)
+            except Exception:
+                pass
 
     # 表头样式：浅蓝底（#EDF1F7）+ 深色字（#1A1F36），与 HTML .sr-tbl th 保持一致
     _TABLE_HEADER_BG = "EDF1F7"
@@ -3313,21 +3369,21 @@ class HtmlToWordExporter:
                     run.font.color.rgb = RGBColor.from_string(fg)
                     self._set_run_shading(run, bg)
             elif ptype == "risk_level_text":
-                # 4.5 节风险等级文字（严重/高危/中危/低危）按 HTML 圆点对应色固定上底纹
-                # 文字固定 → 直接按文字映射颜色，不依赖 sr-tag 类检测
+                # 4.5 节风险等级文字：去底纹，字色=原底纹色，5号(10.5pt)加粗
                 text = content
                 RISK_LEVEL_COLORS = {
-                    "严重": ("82010E", "FFFFFF"),  # --sr-critical
-                    "高危": ("CF171D", "FFFFFF"),  # --sr-danger
-                    "中危": ("FDAA1D", "5A3D00"),  # --sr-caution-dot + 深棕字（白字对比度不足）
-                    "低危": ("6B7A99", "FFFFFF"),  # --sr-text-secondary
+                    "严重": "82010E",   # 原 --sr-critical 底纹色
+                    "高危": "CF171D",   # 原 --sr-danger 底纹色
+                    "中危": "FDAA1D",   # 原 --sr-caution-dot 底纹色
+                    "低危": "6B7A99",   # 原 --sr-text-secondary 底纹色
                 }
                 if text in RISK_LEVEL_COLORS:
-                    bg, fg = RISK_LEVEL_COLORS[text]
+                    fg = RISK_LEVEL_COLORS[text]
                     run = paragraph.add_run(f" {text} ")
                     run.bold = True
+                    run.font.size = Pt(10.5)   # 5号字体
                     run.font.color.rgb = RGBColor.from_string(fg)
-                    self._set_run_shading(run, bg)
+                    # 不再设置底纹
                 else:
                     # 非风险等级文字，按普通文本写入
                     run = paragraph.add_run(text)
