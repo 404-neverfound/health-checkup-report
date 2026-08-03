@@ -868,27 +868,27 @@ function renderInternetExposureDescription(data) {
   // 评分公式：1个资产或1个风险端口=5分，1个漏洞=35分
   const score = (assetCount + riskPorts) * 5 + vulnCount * 35;
 
-  // 风险等级判定（三级：良好 / 一般 / 较差）
+  // 风险等级判定（三级：良好 / 一般 / 较低）
   let level;
   if (score <= 30) level = '良好';
   else if (score <= 70) level = '一般';
-  else level = '较差';
+  else level = '较低';
 
   // 分支 1：0 资产 且 0 端口
   if (assetCount === 0 && portCount === 0) {
     if (vulnCount === 0) {
       // 子分支 1a：全为 0，score=0 → 等级必然为"良好"
-      return paragraph('互联网业务风险良好，没有发现风险暴露面和互联网漏洞。');
+      return '互联网业务风险良好，没有发现风险暴露面和互联网漏洞。';
     } else {
       // 子分支 1b：0 资产 0 端口 X 漏洞，XX 按 score 算
-      return paragraph(`互联网业务风险${level}，存在${vulnCount}个互联网漏洞。`);
+      return `互联网业务风险${level}，存在${vulnCount}个互联网漏洞。`;
     }
   }
 
   // 分支 2：X 资产 或 X 端口（默认场景），XX 按 score 算
   // 末句统一"存在 V 个互联网漏洞"，不再按 score 区分表述
   const weakPwdCount = Number((data.internet && data.internet.weak_pwd && data.internet.weak_pwd.total_count) || 0);
-  return paragraph(
+  return (
     `互联网业务风险${level}，存在一些对外暴露的端口与服务。` +
     `其中有<strong>${assetCount}</strong>个资产暴露了<strong>${portCount}</strong>个端口` +
     `（风险端口<strong>${riskPorts}</strong>个），存在<strong>${vulnCount}</strong>个互联网漏洞，存在<strong>${weakPwdCount}</strong>个弱口令。`
@@ -952,7 +952,7 @@ function renderInternetVulnTopAssetsBlock(data) {
   const tableRows = rows.map((r, i) =>
     '<tr>' +
     `<td>${i + 1}</td>` +
-    `<td>${escapeHtml(r.asset)}</td>` +
+    `<td>${escapeHtml(r.asset)}<br>${escapeHtml(r.vuln_asset_name || '')}</td>` +
     '<td class="sr-vuln-priority-stats">' +
     `<div>急需修复：<strong>${num(r.urgent)}</strong>个</div>` +
     `<div>尽快修复：<strong>${num(r.soon)}</strong>个</div>` +
@@ -979,19 +979,19 @@ function renderIntranetVulnDescription(data) {
   const hasAny = critical + high + medium + low > 0;
 
   if (!hasAny) {
-    return paragraph('当前内网业务整体风险优秀，没有发现漏洞。');
+    return '当前内网业务整体风险优秀，没有发现漏洞。';
   }
 
   let level;
   if (critical > 0 || high > 0) {
-    level = '较差';
+    level = '较低';
   } else if (medium > 0) {
     level = '一般';
   } else {
     level = '良好';
   }
 
-  return paragraph(`当前内网业务整体风险${level}，按照修复优先级来修复。`);
+  return `当前内网业务整体风险${level}，按照修复优先级来修复。`;
 }
 
 function renderIntranetVulnLevelDetail(data) {
@@ -1048,7 +1048,7 @@ function renderIntranetVulnAssetTopBlock(data) {
   const assetTableRows = assetRows.map((r, i) =>
     '<tr>' +
     `<td>${i + 1}</td>` +
-    `<td>${escapeHtml(r.asset)}</td>` +
+    `<td>${escapeHtml(r.asset)}<br>${escapeHtml(r.vuln_asset_name || '')}</td>` +
     '<td class="sr-vuln-priority-stats">' +
     `<div>急需修复：<strong>${num(r.urgent)}</strong>个</div>` +
     `<div>尽快修复：<strong>${num(r.soon)}</strong>个</div>` +

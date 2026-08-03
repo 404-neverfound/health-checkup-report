@@ -29,6 +29,22 @@ def get_rows(ws):
     return rows
 
 
+def get_asset_rows(ws):
+    """资产清单专用读取：第 2 行为表头，第 3 行起为数据。
+    与 mssw_asset_paged_export.py 写出的格式（第 1 行空 + 第 2 行表头）匹配，
+    与分支1/report/protection_effectiveness.py、config.yaml 的 header_row=2 一致。"""
+    headers = [cell.value for cell in ws[2]]
+    rows = []
+    for row in ws.iter_rows(min_row=3, values_only=True):
+        if any(v is not None for v in row):
+            row_dict = {}
+            for h, v in zip(headers, row):
+                if h is not None:
+                    row_dict[h] = v
+            rows.append(row_dict)
+    return rows
+
+
 def count_data_rows(ws):
     """统计 sheet 有效数据行数（不构建字典，轻量版）"""
     count = 0
@@ -130,9 +146,10 @@ def top_by_risk_level(rows, key_field):
     return sorted(data.keys(), key=sort_key)[0]
 
 
-def top_priority_rows(rows, key_field, n=5):
+def top_priority_rows(rows, key_field, n=5, ip_to_name_map=None):
     """按修复优先级（急需 > 尽快 > 建议）分组统计，取 top n。
-       返回 [{asset, urgent, soon, suggest}, ...]"""
+       返回 [{asset, urgent, soon, suggest, vuln_asset_name}, ...]
+       ip_to_name_map 为 IP→资产名称字典时，给每个 row 补 vuln_asset_name（匹配不上为空字符串）"""
     stats = defaultdict(lambda: [0, 0, 0])
     for r in rows:
         k = s(r.get(key_field))
@@ -149,8 +166,15 @@ def top_priority_rows(rows, key_field, n=5):
         stats.keys(),
         key=lambda k: (-stats[k][0], -stats[k][1], -stats[k][2])
     )[:n]
+    name_map = ip_to_name_map or {}
     return [
-        {"asset": k, "urgent": stats[k][0], "soon": stats[k][1], "suggest": stats[k][2]}
+        {
+            "asset": k,
+            "urgent": stats[k][0],
+            "soon": stats[k][1],
+            "suggest": stats[k][2],
+            "vuln_asset_name": name_map.get(k, ""),
+        }
         for k in sorted_keys
     ]
 
@@ -203,7 +227,7 @@ def load_all_data():
         "rows_vuln":        get_rows(get_sheet(wb_vuln,  "漏洞")),
         "rows_weak":        get_rows(get_sheet(wb_weak,  "弱口令")),
         "rows_event":       get_rows(get_sheet(wb_event, "事件表")),
-        "rows_asset":       get_rows(get_sheet(wb_asset, "资产清单")),
+        "rows_asset":       get_asset_rows(get_sheet(wb_asset, "资产清单")),
     }
 
 
@@ -576,7 +600,7 @@ def calc_internet_vuln(ds):
         "priority_urgent":  filter_count(ds["vuln_net"], "修复优先级", "急需修复"),
         "priority_soon":    filter_count(ds["vuln_net"], "修复优先级", "尽快修复"),
         "priority_suggest": filter_count(ds["vuln_net"], "修复优先级", "建议修复"),
-        "top_rows":        top_priority_rows(ds["vuln_net"], "风险资产"),
+        "top_rows":        top_priority_rows(ds["vuln_net"], "风险资产", ip_to_name_map=ds["asset_ip_to_name"]),
     }
 
 
@@ -615,7 +639,7 @@ def calc_intranet_vuln(ds):
         "priority_soon":        filter_count(vi, "修复优先级", "尽快修复"),
         "priority_suggest":     filter_count(vi, "修复优先级", "建议修复"),
         "biz_top_rows":         top_priority_rows_for_biz(vi),
-        "asset_top_rows":       top_priority_rows(vi, "风险资产"),
+        "asset_top_rows":       top_priority_rows(vi, "风险资产", ip_to_name_map=ds["asset_ip_to_name"]),
     }
 
 

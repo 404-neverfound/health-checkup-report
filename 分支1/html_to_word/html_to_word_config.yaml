@@ -175,7 +175,7 @@ update_fields_after_save:
 # align: left / center / right
 header_image:
   path: "assets/header.png"
-  height_mm: 10
+  height_mm: 13.5
   align: left
-  header_distance_mm: 10
+  header_distance_mm: 4
 
