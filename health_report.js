@@ -601,6 +601,13 @@ async function main() {
     const baseName = path.basename(htmlPath, '.html');
     const wordDir = path.join(root, '安全体检报告');
     await fs.mkdir(wordDir, { recursive: true });
+    // 生成新 docx 前，先删除目录下已有的 docx 文件，避免残留旧版本
+    const existingDocx = (await fs.readdir(wordDir))
+      .filter((name) => name.toLowerCase().endsWith('.docx'));
+    if (existingDocx.length) {
+      await Promise.all(existingDocx.map((name) => fs.unlink(path.join(wordDir, name))));
+      logger(`已清理旧的 docx 文件: ${existingDocx.length} 个`);
+    }
     const wordPath = path.join(wordDir, `${baseName}.docx`);
     wordExport = await timedPhase('导出 Word 报告 exportBranch1Word', () => exportBranch1Word({
       htmlPath,
