@@ -4,7 +4,7 @@
 按风险资产 TOP5 统计风险详情。
 
 用法:
-  top_risk_asset_details.py <incident.xlsx> <asset.xlsx> <weakpwd.xlsx> <vuln.xlsx> <exposure.xlsx> <top_assets_json> <c2_ids_json> <virus_ids_json> <exploit_ids_json>
+  top_risk_asset_details.py <incident.xlsx> <weakpwd.xlsx> <vuln.xlsx> <exposure.xlsx> <top_assets_json> <c2_ids_json> <virus_ids_json> <exploit_ids_json>
 """
 
 import json
@@ -139,42 +139,6 @@ def collect_incident_counts(incident_path, target_assets, c2_ids, virus_ids, exp
 
     workbook.close()
     return counts
-
-
-def collect_aes_install_status(asset_path, target_assets):
-    status = {asset: False for asset in target_assets}
-    if not asset_path or not target_assets:
-        return status
-
-    try:
-        workbook = load_workbook(asset_path, read_only=True, data_only=True)
-    except Exception:
-        return status
-
-    sheet = workbook.active
-    col_map, header_row = build_col_map(sheet)
-    ip_col = find_column(col_map, [
-        "IP地址", "P地址", "IP", "地址", "主机IP", "hostIp", "host_ip", "ip", "资产IP"
-    ])
-    data_source_col = find_column(col_map, [
-        "数据源", "数据来源", "dataSource", "data_source", "设备来源", "devSourceNames", "source"
-    ])
-    if ip_col is None:
-        workbook.close()
-        return status
-
-    target_set = set(target_assets)
-    for row in sheet.iter_rows(min_row=header_row + 1, values_only=True):
-        if not any(normalize(cell) for cell in row):
-            continue
-        asset = normalize_asset_key(row[ip_col] if len(row) > ip_col else "")
-        if asset not in target_set:
-            continue
-        data_source = normalize(row[data_source_col]) if data_source_col is not None and len(row) > data_source_col else ""
-        status[asset] = "EDR" in data_source.upper()
-
-    workbook.close()
-    return status
 
 
 def collect_vulnerability_counts(vuln_path, target_assets):
@@ -314,7 +278,7 @@ def collect_exposure_counts(exposure_path, target_assets):
     return counts
 
 
-def build_detail_lines(asset, incident_counts, vuln_counts, weakpwd_counts, exposure_counts, has_aes):
+def build_detail_lines(asset, incident_counts, vuln_counts, weakpwd_counts, exposure_counts):
     total_events = int(incident_counts.get("totalEvents", 0))
     c2_events = int(incident_counts.get("c2Events", 0))
     virus_events = int(incident_counts.get("virusTrojanEvents", 0))
@@ -323,6 +287,7 @@ def build_detail_lines(asset, incident_counts, vuln_counts, weakpwd_counts, expo
     other_events = max(total_events - malware_and_c2_events - exploit_events, 0)
 
     high_vulns = int(vuln_counts.get("highAndAboveVulnerabilities", 0))
+    total_vulns = int(vuln_counts.get("totalVulnerabilities", 0))
     weak_passwords = int(weakpwd_counts.get("weakPasswords", 0))
     total_exposures = int(exposure_counts.get("totalExposures", 0))
     web_exposures = int(exposure_counts.get("webExposures", 0))
@@ -340,8 +305,9 @@ def build_detail_lines(asset, incident_counts, vuln_counts, weakpwd_counts, expo
             f"网站攻击&漏洞攻击<strong>{exploit_events}</strong>起，"
             f"其他事件<strong>{other_events}</strong>起"
         )
-    if high_vulns > 0:
-        lines.append(f"该资产共发现在<strong>{high_vulns}</strong>个高危及以上漏洞")
+    if total_vulns > 0:
+        vuln_tail = f"（其中{high_vulns}个高危及以上）" if high_vulns > 0 else ""
+        lines.append(f"该资产共发现<strong>{total_vulns}</strong>个漏洞{vuln_tail}")
     if weak_passwords > 0:
         lines.append(f"该资产共发现<strong>{weak_passwords}</strong>个弱口令")
     if total_exposures > 0 and (non_web_exposures > 0 or web_exposures > 0):
@@ -357,26 +323,24 @@ def build_detail_lines(asset, incident_counts, vuln_counts, weakpwd_counts, expo
             f"该资产共发现<strong>{total_exposures}</strong>个风险暴露面。"
             f"含{non_web_text}与{web_text}"
         )
-    lines.append(f"该资产{'已安装' if has_aes else '尚未安装'}EDR")
     return lines
 
 
 def main():
-    if len(sys.argv) < 10:
+    if len(sys.argv) < 9:
         raise SystemExit(
-            "Usage: top_risk_asset_details.py <incident.xlsx> <asset.xlsx> <weakpwd.xlsx> <vuln.xlsx> <exposure.xlsx> "
+            "Usage: top_risk_asset_details.py <incident.xlsx> <weakpwd.xlsx> <vuln.xlsx> <exposure.xlsx> "
             "<top_assets_json> <c2_ids_json> <virus_ids_json> <exploit_ids_json>"
         )
 
     incident_path = sys.argv[1]
-    asset_path = sys.argv[2]
-    weakpwd_path = sys.argv[3]
-    vuln_path = sys.argv[4]
-    exposure_path = sys.argv[5]
-    top_assets = json.loads(sys.argv[6])
-    c2_ids = json.loads(sys.argv[7])
-    virus_ids = json.loads(sys.argv[8])
-    exploit_ids = json.loads(sys.argv[9])
+    weakpwd_path = sys.argv[2]
+    vuln_path = sys.argv[3]
+    exposure_path = sys.argv[4]
+    top_assets = json.loads(sys.argv[5])
+    c2_ids = json.loads(sys.argv[6])
+    virus_ids = json.loads(sys.argv[7])
+    exploit_ids = json.loads(sys.argv[8])
 
     ordered_assets = []
     for item in top_assets:
@@ -385,7 +349,6 @@ def main():
             ordered_assets.append(asset)
 
     incident_counts = collect_incident_counts(incident_path, ordered_assets, c2_ids, virus_ids, exploit_ids)
-    aes_status = collect_aes_install_status(asset_path, ordered_assets)
     vuln_counts = collect_vulnerability_counts(vuln_path, ordered_assets)
     weakpwd_counts = collect_weak_password_counts(weakpwd_path, ordered_assets)
     exposure_counts = collect_exposure_counts(exposure_path, ordered_assets)
@@ -396,7 +359,6 @@ def main():
         asset_vuln_counts = vuln_counts.get(asset, {})
         asset_weakpwd_counts = weakpwd_counts.get(asset, {})
         asset_exposure_counts = exposure_counts.get(asset, {})
-        has_aes = bool(aes_status.get(asset))
         details[asset] = {
             **counts,
             **asset_vuln_counts,
@@ -410,8 +372,7 @@ def main():
                 - int(counts.get("vulnExploitEvents", 0)),
                 0,
             ),
-            "hasAes": has_aes,
-            "detailLines": build_detail_lines(asset, counts, asset_vuln_counts, asset_weakpwd_counts, asset_exposure_counts, has_aes),
+            "detailLines": build_detail_lines(asset, counts, asset_vuln_counts, asset_weakpwd_counts, asset_exposure_counts),
         }
 
     print(json.dumps({"assets": details}, ensure_ascii=False))

@@ -90,6 +90,8 @@ node health_report.js `
 | `riskOverview.exploitStats.total` | 漏洞利用事件总数 | 导出的事件表 Excel | 读取 `安全事件一级分类` 列，值等于 `漏洞利用` 的事件行数 |
 | `riskOverview.exploitStats.highRiskAsset` | 漏洞利用高风险资产 | 导出的事件表 Excel | 取第一条 `安全事件一级分类 = 漏洞利用` 事件的 `影响资产` 原始值 |
 | `riskOverview.exploitStats.attackSuccessCount` | 漏洞利用成功次数 | 导出的事件表 Excel | 在 `安全事件一级分类 = 漏洞利用` 的事件中，统计 `攻击状态 = 成功` 的事件行数 |
+| `riskOverview.exploitStats.closedCount` | 漏洞利用已闭环数 | 导出的事件表 Excel | 在 `安全事件一级分类 = 漏洞利用` 的事件中，统计 `处置状态 = 处置完成` 的事件行数（已闭环） |
+| `riskOverview.exploitStats.processingCount` | 漏洞利用处置中数 | 导出的事件表 Excel | 在 `安全事件一级分类 = 漏洞利用` 的事件中，统计 `处置状态 = 处置中` 的事件行数 |
 | `riskOverview.exploitStats.incidentIds` | 漏洞利用事件 ID 列表 | 导出的事件表 Excel | 保留 `安全事件一级分类 = 漏洞利用` 的事件 ID，按事件表遍历顺序输出 |
 | `riskDetails.totalEvents` | 事件总数 | 导出的事件表 Excel | 统计事件表有效数据行数 |
 | `riskDetails.severeEvents` | 严重事件数 | 导出的事件表 Excel | 读取表头为 `等级` 的列，统计值等于 `严重` 的事件行数 |

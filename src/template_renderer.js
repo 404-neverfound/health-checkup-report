@@ -26,6 +26,7 @@ const SECTION_RENDERERS = {
   'riskOverview.topRiskAssetsSummary': renderTopRiskAssetsSummary,
   'riskOverview.topRiskAssetsSummaryFallback': renderTopRiskAssetsSummaryFallback,
   'keyRisks.01.desc': renderThreatActorRiskDescription,
+  'keyRisks.02.desc': renderVulnAttackRiskDescription,
   'riskDetails.caseStudy': renderCaseStudySection,
   'riskDetails.potentialLoss': renderPotentialLoss,
   'riskDetail.severeHighEventsPhrase': renderSevereHighEventsPhrase,
@@ -191,28 +192,84 @@ function patchDataFields(html, data) {
   });
 }
 
-// 策略检查章节 KPI 卡：当 total/total_component_count 为 0（无数据）时，
-// 数值行替换为「暂无数据」文本，避免出现 0/0
+// 策略检查章节 KPI 卡与表格：当 total/total_component_count 为 0（无数据）时，
+// 隐藏对应 KPI 卡及其数据表（total→策略检查项卡+异常项表，total_component_count→涉及组件卡+组件汇总表）
 function patchPolicyCheckKpiCards(html, data) {
   const policyStats = getPath(data, 'protection_effectiveness.policy_stats') || {};
   const total = Number(policyStats.total || 0);
   const totalComponent = Number(policyStats.total_component_count || 0);
 
-  // 策略检查项卡：把整段 sr-kpi-val 内容替换为「暂无数据」
-  if (total === 0) {
-    html = html.replace(
-      /(<div class="sr-kpi-card-hd">📋 策略检查项<\/div>\s*)<div class="sr-kpi-val[^"]*">[\s\S]*?<\/div>/,
-      '$1<div class="sr-kpi-val sr-kpi-val--empty">暂无数据</div>'
-    );
+  if (total === 0 && totalComponent === 0) {
+    // 两张 KPI 卡都无数据：整块移除外层图表插槽（含内部两张卡），避免残留空容器
+    html = removePolicyCheckSlot(html);
+  } else {
+    // 仅策略检查项无：移除策略检查项卡；仅涉及组件无：移除涉及组件卡
+    html = hidePolicyKpiCard(html, 'protection_effectiveness.policy_stats.abnormal_count', total === 0);
+    html = hidePolicyKpiCard(html, 'protection_effectiveness.policy_stats.abnormal_component_count', totalComponent === 0);
   }
-  // 涉及组件卡
+
+  // 涉及组件卡对应的组件汇总表（by_device）：total_component_count 为 0 时隐藏（含引导语）
   if (totalComponent === 0) {
     html = html.replace(
-      /(<div class="sr-kpi-card-hd">📦 涉及组件<\/div>\s*)<div class="sr-kpi-val[^"]*">[\s\S]*?<\/div>/,
-      '$1<div class="sr-kpi-val sr-kpi-val--empty">暂无数据</div>'
+      /(<p class="report-body sr-p">组件全部检查项风险统计：<\/p>\s*<table class="report-table sr-tbl sr-component-summary-tbl">[\s\S]*?<\/table>)/,
+      ''
+    );
+  }
+  // 策略检查项卡对应的异常项明细表（policy_check_example）：total 为 0 时隐藏（含引导语）
+  if (total === 0) {
+    html = html.replace(
+      /(<p class="report-body sr-p">各组件策略检查异常项如下（部分）：<\/p>\s*<table class="report-table sr-tbl sr-component-check-tbl">[\s\S]*?<\/table>)/,
+      ''
     );
   }
   return html;
+}
+
+// 通过 div 开闭标签配对，整块移除「安全组件策略检查」图表插槽（slot-component-check-rings）
+function removePolicyCheckSlot(html) {
+  const slotStart = html.indexOf(
+    '<div class="sr-chart-slot chart-box sr-chart--no-hint" id="slot-component-check-rings" data-chart="slot-component-check-rings">'
+  );
+  if (slotStart < 0) return html;
+  let depth = 0;
+  let pos = slotStart;
+  while (pos < html.length) {
+    const nextOpen = html.indexOf('<div', pos);
+    const nextClose = html.indexOf('</div>', pos);
+    if (nextOpen === -1 && nextClose === -1) break;
+    if (nextOpen !== -1 && (nextClose === -1 || nextOpen < nextClose)) {
+      depth++;
+      pos = nextOpen + 4;
+    } else {
+      depth--;
+      pos = nextClose + 6;
+      if (depth === 0) return html.slice(0, slotStart) + html.slice(pos);
+    }
+  }
+  return html;
+}
+
+// 按卡内 data-field 锚点定位整张 KPI 卡（策略检查项卡 / 涉及组件卡）并移除
+// 结构: <div class="sr-kpi-card"> <div class="sr-kpi-card-hd">...</div> <div class="sr-kpi-val">...</div> <div class="sr-kpi-lbl">...</div> </div>
+function hidePolicyKpiCard(html, dataField, shouldHide) {
+  if (!shouldHide) return html;
+  const escaped = dataField.replace(/\./g, '\\.');
+  const anchorRe = new RegExp('data-field="' + escaped + '"');
+  const m = anchorRe.exec(html);
+  if (!m) return html;
+  const anchorIdx = m.index;
+  // 向前找最近的卡起点
+  const cardStart = html.lastIndexOf('<div class="sr-kpi-card">', anchorIdx);
+  if (cardStart < 0) return html;
+  // 从锚点向后：val div 闭合 → lbl div → 卡闭合 </div>
+  const afterField = html.indexOf('</div>', anchorIdx);
+  const lblStart = html.indexOf('<div class="sr-kpi-lbl">', afterField);
+  if (lblStart < 0) return html;
+  const lblClose = html.indexOf('</div>', lblStart);
+  // 卡闭合是 lbl 闭合之后的下一个 </div>，需从 lblClose 之后开始找，避免取到同一个 </div>
+  const cardClose = html.indexOf('</div>', lblClose + 6);
+  const end = cardClose + '</div>'.length;
+  return html.slice(0, cardStart) + html.slice(end);
 }
 
 function renderSections(html, data) {
@@ -400,6 +457,25 @@ function renderThreatActorRiskDescription(data) {
   const breakdown = actors.length ? `（其中${actors.join('、')}）` : '';
 
   return `贵公司共发生<strong>${total}</strong>起病毒木马与C2外联事件${breakdown}，此类事件会造成主机失陷，可能引发员工的财务损失。`;
+}
+
+// 关键风险 #02 漏洞利用动态文案：按事件表"处置状态"列的"处置完成/处置中"统计已闭环 A 起、处置中 B 起
+// 文案规则见 安全体检报告2.0-需求与交互设计评审.md §P4「关键风险 #02 动态文案」
+function renderVulnAttackRiskDescription(data) {
+  const exploitStats = (data && data.riskOverview && data.riskOverview.exploitStats) || {};
+  const total = Number(exploitStats.total || 0);
+  const attackSuccessCount = Number(exploitStats.attackSuccessCount || 0);
+  const closedCount = Number(exploitStats.closedCount || 0);
+  const processingCount = Number(exploitStats.processingCount || 0);
+
+  let dispositionPhrase;
+  if (closedCount > 0) {
+    dispositionPhrase = `，其中已闭环<strong>${closedCount}</strong>起，处置中<strong>${processingCount}</strong>起`;
+  } else {
+    dispositionPhrase = `，其中处置中<strong>${processingCount}</strong>起`;
+  }
+
+  return `当前贵公司累计发生<strong>${total}</strong>起网站攻击与漏洞攻击，其中<strong>${attackSuccessCount}</strong>起攻击成功${dispositionPhrase}`;
 }
 
 function renderCaseStudySection(data) {

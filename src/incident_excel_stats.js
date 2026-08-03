@@ -155,7 +155,6 @@ async function summarizeTopRiskAssetDetails(options = {}) {
   const scriptPath = path.join(__dirname, '..', 'scripts', 'top_risk_asset_details.py');
   const args = [
     encodePath(options.incidentExcelPath || ''),
-    encodePath(options.assetExcelPath || ''),
     encodePath(options.weakPasswordExcelPath || ''),
     encodePath(options.vulnerabilityExcelPath || ''),
     encodePath(options.exposureExcelPath || ''),
@@ -250,6 +249,8 @@ async function extractExploitStats(incidentExcelPath) {
       total: 0,
       highRiskAsset: '',
       attackSuccessCount: 0,
+      closedCount: 0,
+      processingCount: 0,
       incidentIds: []
     };
   }
@@ -266,6 +267,8 @@ async function extractExploitStats(incidentExcelPath) {
     total: Number(parsed.total || 0),
     highRiskAsset: String(parsed.highRiskAsset || ''),
     attackSuccessCount: Number(parsed.attackSuccessCount || 0),
+    closedCount: Number(parsed.closedCount || 0),
+    processingCount: Number(parsed.processingCount || 0),
     incidentIds: Array.isArray(parsed.incidentIds) ? parsed.incidentIds : []
   };
 }

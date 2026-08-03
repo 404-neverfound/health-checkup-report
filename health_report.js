@@ -147,7 +147,7 @@ async function main() {
 
     try {
       exploitStats = await extractExploitStats(incidentFilePath);
-      logger(`漏洞利用事件统计: 共 ${exploitStats.total} 起, 攻击成功 ${exploitStats.attackSuccessCount} 次, 影响资产 ${exploitStats.highRiskAsset || '无'}`);
+      logger(`漏洞利用事件统计: 共 ${exploitStats.total} 起, 攻击成功 ${exploitStats.attackSuccessCount} 次, 已闭环 ${exploitStats.closedCount} 起, 处置中 ${exploitStats.processingCount} 起, 影响资产 ${exploitStats.highRiskAsset || '无'}`);
     } catch (error) {
       logger(`提取漏洞利用事件统计失败（不影响主流程）: ${error.message}`);
     }
@@ -212,7 +212,7 @@ async function main() {
   // 合并漏洞利用统计到报告数据
   if (exploitStats) {
     reportData.riskOverview.exploitStats = exploitStats;
-    logger(`漏洞利用数据已合并: total=${exploitStats.total}, attackSuccessCount=${exploitStats.attackSuccessCount}`);
+    logger(`漏洞利用数据已合并: total=${exploitStats.total}, attackSuccessCount=${exploitStats.attackSuccessCount}, closedCount=${exploitStats.closedCount}, processingCount=${exploitStats.processingCount}`);
   }
 
   if (!reportData.riskDetails.highRiskIncidentExamples || typeof reportData.riskDetails.highRiskIncidentExamples !== 'object') {
@@ -474,7 +474,6 @@ async function main() {
       try {
         const topRiskAssetDetails = await summarizeTopRiskAssetDetails({
           incidentExcelPath: archivedFiles.incidentPath,
-          assetExcelPath: archivedFiles.assetPath,
           weakPasswordExcelPath: archivedFiles.weakpwdPath,
           vulnerabilityExcelPath: archivedFiles.vulnPath,
           exposureExcelPath: archivedFiles.exposurePath,
@@ -551,7 +550,11 @@ async function main() {
     const vulnExploits = Array.isArray(examples.vulnExploits) ? examples.vulnExploits.length : 0;
     const allEmpty = c2 + viruses + vulnExploits === 0;
     reportData.riskDetails.highRiskEventsSectionHide = allEmpty;
-    logger(`4.1.3 高危及以上安全事件章节隐藏标记: ${allEmpty} (C2=${c2}, 病毒=${viruses}, 漏洞利用=${vulnExploits})`);
+    // 各子模块（C2外联/病毒木马/漏洞利用）无事件时不展示该子模块
+    reportData.riskDetails.c2EventsSubsectionHide = c2 === 0;
+    reportData.riskDetails.virusEventsSubsectionHide = viruses === 0;
+    reportData.riskDetails.vulnExploitSubsectionHide = vulnExploits === 0;
+    logger(`4.1.3 高危及以上安全事件章节隐藏标记: ${allEmpty} (C2=${c2}, 病毒=${viruses}, 漏洞利用=${vulnExploits}) 子模块隐藏: C2=${c2 === 0}, 病毒=${viruses === 0}, 漏洞利用=${vulnExploits === 0}`);
   }
 
   // 4.1.2 安全事件分布：事件表一个事件都没有则整章不展示
@@ -1016,6 +1019,12 @@ async function resolveEffectiveTimeRange({ options, customerId, msswCookie, repo
     throw new Error('时间参数必须同时传入 --start 和 --end，或两者都不传');
   }
 
+  // 对用户传入的原始时间先做校验：格式、start≤end、end 不晚于今天
+  // 必须放在服务范围 clamp 之前，否则未来日期会被静默截断而不是明确报错
+  if (hasStart && hasEnd) {
+    validateDateRange(String(options.start).trim(), String(options.end).trim());
+  }
+
   // 每次都要查接口拿服务起止时间
   let serviceTimeRange = null;
   const canFetchEicvres = Boolean(options['mssw-cookie-path'] && customerId);
@@ -1115,6 +1124,12 @@ function validateDateRange(start, end) {
   }
   if (begin > finish) {
     throw new Error('时间范围无效: --start 不能晚于 --end');
+  }
+  // --end 不能晚于今天（按天比较：end 当天 00:00 若晚于今天 00:00 则视为未来）
+  const endDayStart = parseLocalDate(end, false);
+  const todayStart = Math.floor(new Date(new Date().setHours(0, 0, 0, 0)).getTime() / 1000);
+  if (endDayStart > todayStart) {
+    throw new Error('时间范围无效: --end 不能晚于今天');
   }
 }
 

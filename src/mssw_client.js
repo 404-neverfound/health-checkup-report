@@ -2686,8 +2686,8 @@ function resolveDefaultProjectTimeRangeFromResponse(response, reportGeneratedAt)
 
   const minServiceStart = Math.min(...serviceStartList);
   const minServiceEnd = nonNullServiceEnds.length ? Math.min(...nonNullServiceEnds) : null;
-  const endOfYesterdayMs = generatedAt.getTime() - 24 * 60 * 60 * 1000;
-  const effectiveEndMs = minServiceEnd === null ? endOfYesterdayMs : Math.min(endOfYesterdayMs, minServiceEnd);
+  const endOfTodayMs = generatedAt.getTime();
+  const effectiveEndMs = minServiceEnd === null ? endOfTodayMs : Math.min(endOfTodayMs, minServiceEnd);
 
   if (minServiceStart > effectiveEndMs) {
     throw new Error('MSSW 服务时间异常: 推导出的开始时间晚于结束时间');
@@ -3218,18 +3218,16 @@ function resolveSecurityStatsTimeRange(start, end) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // 近 30 天：昨天往前推 29 天（含昨天，共 30 天）
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const recentStart = new Date(yesterday);
+  // 近 30 天：今天往前推 29 天（含今天，共 30 天）
+  const recentStart = new Date(today);
   recentStart.setDate(recentStart.getDate() - 29);
   const recentStartMs = recentStart.getTime();
-  const recentEndMs = yesterday.getTime() + 24 * 60 * 60 * 1000 - 1; // 含昨日全天
+  const recentEndMs = today.getTime() + 24 * 60 * 60 * 1000 - 1; // 含今天全天
 
   const userStartMs = parseLocalDate(start, false) * 1000;
   const userEndMs = parseLocalDate(end, true) * 1000;
 
-  // 取交集：报告范围 ∩ 近31天
+  // 取交集：报告范围 ∩ 近30天
   const effectiveStartMs = Math.max(userStartMs, recentStartMs);
   const effectiveEndMs = Math.min(userEndMs, recentEndMs);
 
