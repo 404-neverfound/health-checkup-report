@@ -2919,6 +2919,18 @@ class HtmlToWordExporter:
             except Exception:
                 pass
 
+        # 仅 4.5 节"体检总体评级"表：数据行的第 1、2 列（徽章、风险程度）段落居中
+        # 表头行与第 3 列"定义"保持原对齐（与 HTML inline style="text-align:left" 一致）
+        if "sr-appendix-grade-tbl" in node_classes:
+            for ri, row in enumerate(table.rows):
+                if ri == 0:
+                    continue
+                for ci, cell in enumerate(row.cells):
+                    if ci >= 2:
+                        continue
+                    for paragraph in cell.paragraphs:
+                        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
     # 表头样式：浅蓝底（#EDF1F7）+ 深色字（#1A1F36），与 HTML .sr-tbl th 保持一致
     _TABLE_HEADER_BG = "EDF1F7"
     _TABLE_HEADER_FG = "1A1F36"
