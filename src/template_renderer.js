@@ -703,13 +703,22 @@ function renderAttackTimelineColumn(group, index) {
 
 function renderDefenseTimelineColumn(item) {
   const label = escapeHtml(String((item && item.label) || '防守时间线').trim());
-  const time = formatCaseStudyTimestamp(item && item.timestamp);
+  const timeEntries = Array.isArray(item && item.timeEntries) ? item.timeEntries : [];
+
+  let timeHtml;
+  if (timeEntries.length > 0) {
+    timeHtml = timeEntries.map((entry) => {
+      const time = formatCaseStudyTimestamp(entry && entry.timestamp);
+      const desc = escapeHtml(String(entry && entry.desc || '').trim());
+      return time && desc ? `<div class="tm-time">${time} ${desc}</div>` : '';
+    }).filter(Boolean).join('');
+  }
 
   return [
     '<div class="tm-right">',
     '<div class="tm-card def">',
     `<div class="tm-tag">${label}</div>`,
-    time ? `<div class="tm-time">${time}</div>` : '<div class="tm-time">暂无时间</div>',
+    timeHtml || '<div class="tm-time">暂无时间</div>',
     '<span class="tm-arrow"></span>',
     '</div>',
     '</div>'
