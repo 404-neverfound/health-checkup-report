@@ -65,7 +65,7 @@ def main():
         'rows_vuln': branch2.get_rows(wb_vuln['漏洞']),
         'rows_weak': branch2.get_rows(wb_weak['弱口令']),
         'rows_event': branch2.get_rows(wb_event.active),
-        'rows_asset': branch2.get_rows(ws_asset),
+        'rows_asset': branch2.get_asset_rows(ws_asset),
     }
 
     ds = branch2.prepare_datasets(raw)
