@@ -1228,7 +1228,7 @@ function extractAttckTechniqueHits(response) {
   return hits;
 }
 
-// 防守时间线固定五个节点的标签和对应的时间字段组
+// 防守时间线固定四个节点的标签和对应的时间字段组
 const DEFENSE_TIMELINE_NODES = [
   {
     label: '【日志】接收到所有相关日志',
@@ -1243,18 +1243,15 @@ const DEFENSE_TIMELINE_NODES = [
     timeLabels: ['云端AI安服联动时间', 'NAE关联分析引擎接收时间', '首次安全事件生成时间', '安全事件接收时间', '安全事件入库时间']
   },
   {
-    label: '【遏制】联动封锁威胁实体'
-    // 时间取事件表的"完成时间"
-  },
-  {
-    label: '【闭环】上机排查，根除病毒，下发外联loC'
-    // 时间取事件表的"完成时间"
+    label: '【闭环】云端专家对威胁进行处置闭环',
+    // 固定显示两个时间条目，取值均来自事件表的"完成时间"
+    fixedTimeDescs: ['威胁遏制时间', '闭环时间']
   }
 ];
 
 function buildDefenseTimelineFromIncidentRow(row, completionTime) {
   if (!row || typeof row !== 'object') {
-    console.log('[DEBUG] 防守时间线构建: row 为空或非对象，返回固定五节点占位');
+    console.log('[DEBUG] 防守时间线构建: row 为空或非对象，返回固定四节点占位');
     return buildFixedDefenseNodes([], '');
   }
   const logTraceInfo = row.logTraceInfo && typeof row.logTraceInfo === 'object' ? row.logTraceInfo : {};
@@ -1293,46 +1290,56 @@ function buildDefenseTimelineFromIncidentRow(row, completionTime) {
 }
 
 /**
- * 从 label→time 映射中查找匹配的时间。
- * 对 timeLabels 中的每个标签尝试匹配（支持精确匹配和包含匹配），取所有匹配中最大的时间戳。
+ * 从 label→time 映射中收集所有匹配的时间条目。
+ * 对 timeLabels 中的每个标签尝试匹配（支持精确匹配和包含匹配），返回所有命中的条目。
  */
-function resolveMaxTimeFromLabels(labelTimeMap, timeLabels) {
-  let maxTime = null;
+function collectTimeEntriesFromLabels(labelTimeMap, timeLabels) {
+  const entries = [];
+  const seenLabels = new Set(); // 避免同一 label 重复添加
   for (const targetLabel of timeLabels) {
     for (const [mapLabel, ts] of labelTimeMap) {
       // 精确匹配或互相包含
       if (mapLabel === targetLabel || mapLabel.includes(targetLabel) || targetLabel.includes(mapLabel)) {
-        if (maxTime === null || ts > maxTime) {
-          maxTime = ts;
+        if (!seenLabels.has(mapLabel)) {
+          seenLabels.add(mapLabel);
+          entries.push({ timestamp: ts, desc: mapLabel });
         }
       }
     }
   }
-  return maxTime;
+  // 按时间升序排列
+  entries.sort((a, b) => a.timestamp - b.timestamp);
+  return entries;
 }
 
 function buildFixedDefenseNodes(labelTimeMap, completionTime) {
   const nodes = [];
   for (const nodeDef of DEFENSE_TIMELINE_NODES) {
-    let timestamp = null;
+    let timeEntries = [];
     if (nodeDef.timeLabels) {
-      // 前三个节点：从接口返回中取相关时间标签的最晚时间
-      timestamp = resolveMaxTimeFromLabels(labelTimeMap, nodeDef.timeLabels);
-    } else {
-      // 第四、五个节点：取事件表的完成时间
-      timestamp = completionTime;
+      // 前三个节点：从接口返回中收集所有相关时间标签的条目
+      timeEntries = collectTimeEntriesFromLabels(labelTimeMap, nodeDef.timeLabels);
+    } else if (Array.isArray(nodeDef.fixedTimeDescs) && completionTime != null && completionTime > 0) {
+      // 闭环节点：固定展示"威胁遏制时间 / 闭环时间"两个条目，时间均取事件表的完成时间
+      timeEntries = nodeDef.fixedTimeDescs.map((desc) => ({
+        timestamp: completionTime,
+        desc
+      }));
     }
     nodes.push({
       label: nodeDef.label,
-      timestamp: timestamp
+      timeEntries: timeEntries
     });
   }
 
-  console.log('[DEBUG] 防守时间线构建: 固定五节点结果:', JSON.stringify(
+  console.log('[DEBUG] 防守时间线构建: 固定四节点结果:', JSON.stringify(
     nodes.map((item) => ({
       label: item.label,
-      timestamp: item.timestamp,
-      time: item.timestamp && item.timestamp > 0 ? new Date(item.timestamp * 1000).toISOString() : '暂无时间'
+      entriesCount: item.timeEntries.length,
+      entries: item.timeEntries.map((e) => ({
+        time: e.timestamp > 0 ? new Date(e.timestamp * 1000).toISOString() : '暂无时间',
+        desc: e.desc
+      }))
     }))
   , null, 2));
 
@@ -1505,7 +1512,10 @@ async function fetchIncidentCaseStudy(options = {}) {
     logInfo(options.logger, `[典型案例] 防守时间线: ${result.defenseTimeline.length} 条, incidentRow=${incidentRow ? '有' : '无'}`);
     if (result.defenseTimeline.length > 0) {
       logInfo(options.logger, `[典型案例] 防守时间线详情: ${JSON.stringify(result.defenseTimeline.map((item) => ({
-        time: item.timestamp && item.timestamp > 0 ? new Date(item.timestamp * 1000).toISOString() : '暂无时间',
+        entries: Array.isArray(item.timeEntries) ? item.timeEntries.map((e) => ({
+          time: e.timestamp && e.timestamp > 0 ? new Date(e.timestamp * 1000).toISOString() : '暂无时间',
+          desc: e.desc
+        })) : [],
         label: item.label
       })))}`);
     }

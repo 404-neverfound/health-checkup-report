@@ -526,12 +526,21 @@ async function main() {
     const k = reportData.key_risks || {};
     const igs = r.incidentGptStats || {};
     const es = r.exploitStats || {};
+    // 防护有效性（#06）：无资产未安装EDR 且 无策略配置异常 时隐藏，与 #01-#05 口径一致
+    const pe = reportData.protection_effectiveness || {};
+    const withoutAesTotal = Number(((pe.without_aes_asset_stats || {}).total) || 0);
+    const policyAbnormal = Number(((pe.policy_stats || {}).abnormal_count) || 0);
     r.keyRisk01Hide = (igs.total || 0) === 0;
     r.keyRisk02Hide = (es.total || 0) === 0;
     r.keyRisk03Hide = ((k.vuln || {}).high_count || 0) === 0;
     r.keyRisk04Hide = ((k.weak_pwd || {}).total || 0) === 0;
     r.keyRisk05Hide = ((k.exposure || {}).total || 0) === 0;
-    logger(`关键风险卡片隐藏标记: #01=${r.keyRisk01Hide} #02=${r.keyRisk02Hide} #03=${r.keyRisk03Hide} #04=${r.keyRisk04Hide} #05=${r.keyRisk05Hide}`);
+    r.keyRisk06Hide = withoutAesTotal === 0 && policyAbnormal === 0;
+    // 全部关键风险子类都隐藏时，2.1 节导语「以下几类问题需要贵公司重点关注：」改为「暂无风险」
+    r.keyRisksAllHidden = r.keyRisk01Hide && r.keyRisk02Hide && r.keyRisk03Hide
+      && r.keyRisk04Hide && r.keyRisk05Hide && r.keyRisk06Hide;
+    r.keyRisksNotAllHidden = !r.keyRisksAllHidden;
+    logger(`关键风险卡片隐藏标记: #01=${r.keyRisk01Hide} #02=${r.keyRisk02Hide} #03=${r.keyRisk03Hide} #04=${r.keyRisk04Hide} #05=${r.keyRisk05Hide} #06=${r.keyRisk06Hide} 全部隐藏=${r.keyRisksAllHidden}`);
   }
 
   // 4.1.3 高危及以上安全事件：三类（C2外联/病毒木马/漏洞利用）全部为空则整章不展示
@@ -563,8 +572,10 @@ async function main() {
     logger(`4.1.4 典型案例章节隐藏标记: ${noCase} (attack=${attack}, defense=${defense})`);
     if (defenseItems.length > 0) {
       logger(`4.1.4 防守时间线详情: ${JSON.stringify(defenseItems.map((item) => ({
-        timestamp: item.timestamp,
-        time: new Date(item.timestamp).toISOString(),
+        entries: Array.isArray(item.timeEntries) ? item.timeEntries.map((e) => ({
+          time: e.timestamp && e.timestamp > 0 ? new Date(e.timestamp * 1000).toISOString() : '暂无时间',
+          desc: e.desc
+        })) : [],
         label: item.label
       })))}`);
     }
