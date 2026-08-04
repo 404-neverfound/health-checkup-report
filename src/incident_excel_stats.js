@@ -248,7 +248,6 @@ async function extractExploitStats(incidentExcelPath) {
     return {
       total: 0,
       highRiskAsset: '',
-      attackSuccessCount: 0,
       closedCount: 0,
       processingCount: 0,
       incidentIds: []
@@ -266,7 +265,6 @@ async function extractExploitStats(incidentExcelPath) {
   return {
     total: Number(parsed.total || 0),
     highRiskAsset: String(parsed.highRiskAsset || ''),
-    attackSuccessCount: Number(parsed.attackSuccessCount || 0),
     closedCount: Number(parsed.closedCount || 0),
     processingCount: Number(parsed.processingCount || 0),
     incidentIds: Array.isArray(parsed.incidentIds) ? parsed.incidentIds : []

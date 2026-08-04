@@ -89,7 +89,6 @@ node health_report.js `
 | `riskOverview.incidentGptStats.unlabeledAssets` | 未标注责任人资产 IP 列表 | 事件表 Excel + 资产表 Excel | 对已确认事件涉及资产按事件表顺序去重；在资产表中若 `责任人` 为空或资产缺失，则计入，最多返回 2 个 |
 | `riskOverview.exploitStats.total` | 漏洞利用事件总数 | 导出的事件表 Excel | 读取 `安全事件一级分类` 列，值等于 `漏洞利用` 的事件行数 |
 | `riskOverview.exploitStats.highRiskAsset` | 漏洞利用高风险资产 | 导出的事件表 Excel | 取第一条 `安全事件一级分类 = 漏洞利用` 事件的 `影响资产` 原始值 |
-| `riskOverview.exploitStats.attackSuccessCount` | 漏洞利用成功次数 | 导出的事件表 Excel | 在 `安全事件一级分类 = 漏洞利用` 的事件中，统计 `攻击状态 = 成功` 的事件行数 |
 | `riskOverview.exploitStats.closedCount` | 漏洞利用已闭环数 | 导出的事件表 Excel | 在 `安全事件一级分类 = 漏洞利用` 的事件中，统计 `处置状态 = 处置完成` 的事件行数（已闭环） |
 | `riskOverview.exploitStats.processingCount` | 漏洞利用处置中数 | 导出的事件表 Excel | 在 `安全事件一级分类 = 漏洞利用` 的事件中，统计 `处置状态 = 处置中` 的事件行数 |
 | `riskOverview.exploitStats.incidentIds` | 漏洞利用事件 ID 列表 | 导出的事件表 Excel | 保留 `安全事件一级分类 = 漏洞利用` 的事件 ID，按事件表遍历顺序输出 |

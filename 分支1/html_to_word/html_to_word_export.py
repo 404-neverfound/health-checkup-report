@@ -83,25 +83,26 @@ _DEFAULT_CONFIG = {
     "docx": {"page_width_mm": 210, "page_height_mm": 297, "margin_mm": 20},
     "fonts": {
         "normal": {"font": "Microsoft YaHei", "east_asia": "Microsoft YaHei",
-                   "size_pt": 10.5, "color_hex": "000000"},
+                   "size_pt": 10.5, "color_hex": "000000",
+                   "space_after_pt": 6},
         "heading_1": {"font": "Microsoft YaHei", "east_asia": "Microsoft YaHei",
-                      "size_pt": 22, "bold": True, "color_hex": "1F4E79",
-                      "space_before_pt": 12, "space_after_pt": 6},
+                      "size_pt": 15, "bold": True, "color_hex": "1F4E79",
+                      "space_before_pt": 18, "space_after_pt": 9},
         "heading_2": {"font": "Microsoft YaHei", "east_asia": "Microsoft YaHei",
-                      "size_pt": 18, "bold": True, "color_hex": "1F4E79",
-                      "space_before_pt": 10, "space_after_pt": 6},
+                      "size_pt": 14, "bold": True, "color_hex": "1F4E79",
+                      "space_before_pt": 18, "space_after_pt": 9},
         "heading_3": {"font": "Microsoft YaHei", "east_asia": "Microsoft YaHei",
-                      "size_pt": 16, "bold": True, "color_hex": "2E5C8A",
-                      "space_before_pt": 8, "space_after_pt": 4},
+                      "size_pt": 10.5, "bold": True, "color_hex": "2E5C8A",
+                      "space_before_pt": 6, "space_after_pt": 9},
         "heading_4": {"font": "Microsoft YaHei", "east_asia": "Microsoft YaHei",
-                      "size_pt": 14, "bold": True, "color_hex": "2E5C8A",
-                      "space_before_pt": 6, "space_after_pt": 4},
+                      "size_pt": 10.5, "bold": True, "color_hex": "2E5C8A",
+                      "space_before_pt": 6, "space_after_pt": 9},
         "heading_5": {"font": "Microsoft YaHei", "east_asia": "Microsoft YaHei",
-                      "size_pt": 12, "bold": True, "color_hex": "44546A",
-                      "space_before_pt": 6, "space_after_pt": 2},
+                      "size_pt": 10.5, "bold": True, "color_hex": "44546A",
+                      "space_before_pt": 6, "space_after_pt": 9},
         "heading_6": {"font": "Microsoft YaHei", "east_asia": "Microsoft YaHei",
-                      "size_pt": 11, "bold": True, "color_hex": "44546A",
-                      "space_before_pt": 4, "space_after_pt": 2},
+                      "size_pt": 10.5, "bold": True, "color_hex": "44546A",
+                      "space_before_pt": 6, "space_after_pt": 9},
     },
     "screenshot": {"type": "png", "scale": 2},
     "tmp_dir": "tmp/html_to_word",
@@ -182,7 +183,7 @@ class _Container:
             run.bold = True
             # 优先读 fonts.heading_<level> 配置；缺省回退到内置字号映射
             heading_cfg = (self.fonts.get(f"heading_{level}", {}) or {}) if self.fonts else {}
-            default_size_map = {1: 22, 2: 18, 3: 16, 4: 14, 5: 12, 6: 11}
+            default_size_map = {1: 15, 2: 14, 3: 10.5, 4: 10.5, 5: 10.5, 6: 10.5}
             size_pt = heading_cfg.get("size_pt") or default_size_map.get(level, 11)
             run.font.size = Pt(size_pt)
             if heading_cfg.get("color_hex"):
@@ -2587,7 +2588,13 @@ class HtmlToWordExporter:
                         new_fmt["italic"] = True
                 inherited_fmt = new_fmt
         for child in node.children:
-            if isinstance(child, NavigableString):
+            if isinstance(child, Tag) and child.name == "br":
+                # 软换行：flush 已累计文本，追加 br 标记（写入段落后映射为 <w:br/>）
+                if current_text:
+                    parts.append(("text", "".join(current_text), inherited_fmt))
+                    current_text.clear()
+                parts.append(("br", None, None))
+            elif isinstance(child, NavigableString):
                 current_text.append(str(child))
             elif isinstance(child, Tag) and child.name in bold_tags:
                 if current_text:
@@ -2961,6 +2968,15 @@ class HtmlToWordExporter:
                         continue
                     for paragraph in cell.paragraphs:
                         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # 4.5 节"安全事件/漏洞评级"表：数据行的第 1 列（风险等级）段落居中
+        # 与 HTML .sr-appendix-risk-level-tbl td:first-child { text-align:center } 一致
+        if "sr-appendix-risk-level-tbl" in node_classes:
+            for ri, row in enumerate(table.rows):
+                if ri == 0:
+                    continue
+                for paragraph in row.cells[0].paragraphs:
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     # 表头样式：浅蓝底（#EDF1F7）+ 深色字（#1A1F36），与 HTML .sr-tbl th 保持一致
     _TABLE_HEADER_BG = "EDF1F7"

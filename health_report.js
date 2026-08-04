@@ -147,7 +147,7 @@ async function main() {
 
     try {
       exploitStats = await extractExploitStats(incidentFilePath);
-      logger(`漏洞利用事件统计: 共 ${exploitStats.total} 起, 攻击成功 ${exploitStats.attackSuccessCount} 次, 已闭环 ${exploitStats.closedCount} 起, 处置中 ${exploitStats.processingCount} 起, 影响资产 ${exploitStats.highRiskAsset || '无'}`);
+      logger(`漏洞利用事件统计: 共 ${exploitStats.total} 起, 已闭环 ${exploitStats.closedCount} 起, 处置中 ${exploitStats.processingCount} 起, 影响资产 ${exploitStats.highRiskAsset || '无'}`);
     } catch (error) {
       logger(`提取漏洞利用事件统计失败（不影响主流程）: ${error.message}`);
     }
@@ -212,7 +212,7 @@ async function main() {
   // 合并漏洞利用统计到报告数据
   if (exploitStats) {
     reportData.riskOverview.exploitStats = exploitStats;
-    logger(`漏洞利用数据已合并: total=${exploitStats.total}, attackSuccessCount=${exploitStats.attackSuccessCount}, closedCount=${exploitStats.closedCount}, processingCount=${exploitStats.processingCount}`);
+    logger(`漏洞利用数据已合并: total=${exploitStats.total}, closedCount=${exploitStats.closedCount}, processingCount=${exploitStats.processingCount}`);
   }
 
   if (!reportData.riskDetails.highRiskIncidentExamples || typeof reportData.riskDetails.highRiskIncidentExamples !== 'object') {

@@ -105,6 +105,7 @@ function renderTemplate(template, reportData, gradeAssets) {
   html = patchKeyRisk01Advice(html, reportData);
   html = patchDataFields(html, reportData);
   html = patchPolicyCheckKpiCards(html, reportData);
+  html = patchWeakPwdSections(html, reportData);
   html = patchGrade(html, reportData, gradeAssets);
   html = injectReportData(html, reportData);
   html = patchOps3DeviceCells(html, reportData);
@@ -225,14 +226,15 @@ function patchPolicyCheckKpiCards(html, data) {
   return html;
 }
 
-// 通过 div 开闭标签配对，整块移除「安全组件策略检查」图表插槽（slot-component-check-rings）
-function removePolicyCheckSlot(html) {
-  const slotStart = html.indexOf(
-    '<div class="sr-chart-slot chart-box sr-chart--no-hint" id="slot-component-check-rings" data-chart="slot-component-check-rings">'
-  );
+// 通过 div 开闭标签配对，整块移除指定 id 的图表插槽
+function removeSlotById(html, slotId) {
+  const slotStart = html.indexOf(`id="${slotId}"`);
   if (slotStart < 0) return html;
+  // 向前回退到该 div 的开始标签起点（<div）
+  const tagStart = html.lastIndexOf('<div', slotStart);
+  if (tagStart < 0) return html;
   let depth = 0;
-  let pos = slotStart;
+  let pos = tagStart;
   while (pos < html.length) {
     const nextOpen = html.indexOf('<div', pos);
     const nextClose = html.indexOf('</div>', pos);
@@ -243,10 +245,15 @@ function removePolicyCheckSlot(html) {
     } else {
       depth--;
       pos = nextClose + 6;
-      if (depth === 0) return html.slice(0, slotStart) + html.slice(pos);
+      if (depth === 0) return html.slice(0, tagStart) + html.slice(pos);
     }
   }
   return html;
+}
+
+// 通过 div 开闭标签配对，整块移除「安全组件策略检查」图表插槽（slot-component-check-rings）
+function removePolicyCheckSlot(html) {
+  return removeSlotById(html, 'slot-component-check-rings');
 }
 
 // 按卡内 data-field 锚点定位整张 KPI 卡（策略检查项卡 / 涉及组件卡）并移除
@@ -270,6 +277,50 @@ function hidePolicyKpiCard(html, dataField, shouldHide) {
   const cardClose = html.indexOf('</div>', lblClose + 6);
   const end = cardClose + '</div>'.length;
   return html.slice(0, cardStart) + html.slice(end);
+}
+
+// 弱口令章节：当某范围弱口令总数 total_count 为 0 时，
+// 1) 引言句去掉「分布如下：」；
+// 2) 整块移除下方图表插槽（含「弱口令发现 / 业务影响」KPI 卡及分布图）；
+// 3) 详情注释去掉「见《弱口令清单.xlsx》，也」，仅保留访问入口。
+function patchWeakPwdSections(html, data) {
+  html = patchWeakPwdScope(html, data, 'internet');
+  html = patchWeakPwdScope(html, data, 'intranet');
+  return html;
+}
+
+function patchWeakPwdScope(html, data, scope) {
+  const wp = (data[scope] && data[scope].weak_pwd) || {};
+  if (Number(wp.total_count || 0) !== 0) return html;
+
+  const slotId = scope === 'internet' ? 'slot-internet-weak' : 'slot-intranet-weak';
+  const slotAnchor = `id="${slotId}"`;
+  if (html.indexOf(slotAnchor) >= 0) {
+    html = removeSlotById(html, slotId);
+  }
+
+  // 仅在当前范围的弱口令小节内去掉「分布如下：」
+  // （互联网 / 内网弱口令引言结构相同，须按小节边界圈定，避免误伤另一范围）
+  const startAnchor = scope === 'internet'
+    ? '<h5 class="sr-h5" id="sec-internet-weak">弱口令</h5>'
+    : '<h5 class="sr-h5" id="sec-intranet-weak">弱口令</h5>';
+  const endAnchor = scope === 'internet'
+    ? '<h4 class="sr-h4" id="sec-intranet">'
+    : '<h4 class="sr-h4" id="sec-protection-effectiveness">';
+  const start = html.indexOf(startAnchor);
+  const end = start >= 0 ? html.indexOf(endAnchor, start + 1) : -1;
+  if (start < 0 || end < 0) return html;
+
+  const section = html.slice(start, end);
+  const patchedSection = section
+    // 引言句去掉「分布如下：」
+    .replace(
+      /(本次体检共发现 <strong>[^<]*<\/strong> 个资产存在弱口令 <strong>[^<]*<\/strong> 个，)分布如下：/g,
+      '$1'
+    )
+    // 弱口令数为 0 时详情注释不再指向清单：去掉「见《弱口令清单.xlsx》，也」
+    .replace(/见《弱口令清单\.xlsx》，也/g, '');
+  return html.slice(0, start) + patchedSection + html.slice(end);
 }
 
 function renderSections(html, data) {
@@ -464,7 +515,6 @@ function renderThreatActorRiskDescription(data) {
 function renderVulnAttackRiskDescription(data) {
   const exploitStats = (data && data.riskOverview && data.riskOverview.exploitStats) || {};
   const total = Number(exploitStats.total || 0);
-  const attackSuccessCount = Number(exploitStats.attackSuccessCount || 0);
   const closedCount = Number(exploitStats.closedCount || 0);
   const processingCount = Number(exploitStats.processingCount || 0);
 
@@ -475,7 +525,7 @@ function renderVulnAttackRiskDescription(data) {
     dispositionPhrase = `，其中处置中<strong>${processingCount}</strong>起`;
   }
 
-  return `当前贵公司累计发生<strong>${total}</strong>起网站攻击与漏洞攻击，其中<strong>${attackSuccessCount}</strong>起攻击成功${dispositionPhrase}`;
+  return `当前贵公司累计发生<strong>${total}</strong>起网站攻击与漏洞攻击${dispositionPhrase}`;
 }
 
 function renderCaseStudySection(data) {

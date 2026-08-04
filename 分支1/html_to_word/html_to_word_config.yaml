@@ -87,7 +87,7 @@ docx:
 # - bold:        是否加粗（true/false）
 # - italic:      是否斜体（true/false）
 # - color_hex:   字体颜色（RRGGBB，不带 #）；留空则不覆盖
-# - space_before_pt / space_after_pt: 段前/段后间距（磅）
+# - space_before_pt / space_after_pt: 段前/段后间距（磅）。如按 CSS px 约定，24px≈18pt、8px≈6pt、12px≈9pt
 # - line_spacing_pt: 行距（磅），留空则不覆盖
 fonts:
   normal:
@@ -95,60 +95,61 @@ fonts:
     east_asia: "微软雅黑"
     size_pt: 10.5
     color_hex: "000000"
+    space_after_pt: 6
   heading_1:
     font: "微软雅黑"
     east_asia: "微软雅黑"
-    size_pt: 22
+    size_pt: 15
     bold: true
     italic: false
     color_hex: "000000"
-    space_before_pt: 12
-    space_after_pt: 6
+    space_before_pt: 18
+    space_after_pt: 9
   heading_2:
-    font: "微软雅黑"
-    east_asia: "微软雅黑"
-    size_pt: 18
-    bold: true
-    italic: false
-    color_hex: "000000"
-    space_before_pt: 10
-    space_after_pt: 6
-  heading_3:
-    font: "微软雅黑"
-    east_asia: "微软雅黑"
-    size_pt: 16
-    bold: true
-    italic: false
-    color_hex: "000000"
-    space_before_pt: 8
-    space_after_pt: 4
-  heading_4:
     font: "微软雅黑"
     east_asia: "微软雅黑"
     size_pt: 14
     bold: true
     italic: false
     color_hex: "000000"
-    space_before_pt: 6
-    space_after_pt: 4
-  heading_5:
+    space_before_pt: 18
+    space_after_pt: 9
+  heading_3:
     font: "微软雅黑"
     east_asia: "微软雅黑"
-    size_pt: 12
+    size_pt: 10.5
     bold: true
     italic: false
     color_hex: "000000"
     space_before_pt: 6
-    space_after_pt: 2
+    space_after_pt: 9
+  heading_4:
+    font: "微软雅黑"
+    east_asia: "微软雅黑"
+    size_pt: 10.5
+    bold: true
+    italic: false
+    color_hex: "000000"
+    space_before_pt: 6
+    space_after_pt: 9
+  heading_5:
+    font: "微软雅黑"
+    east_asia: "微软雅黑"
+    size_pt: 10.5
+    bold: true
+    italic: false
+    color_hex: "000000"
+    space_before_pt: 6
+    space_after_pt: 9
   heading_6:
     font: "微软雅黑"
     east_asia: "微软雅黑"
-    size_pt: 11
+    size_pt: 10.5
     bold: true
     italic: false
     color_hex: "000000"
     space_before_pt: 4
-    space_after_pt: 2
+    space_after_pt: 9
 
 # 截图质量
 screenshot:
