@@ -908,7 +908,7 @@ function buildOutputFilename(data) {
   const generatedAt = projectBackground.generatedAt ? new Date(projectBackground.generatedAt) : new Date();
   const pad = (n) => String(n).padStart(2, '0');
   const timestamp = `${generatedAt.getFullYear()}${pad(generatedAt.getMonth() + 1)}${pad(generatedAt.getDate())}${pad(generatedAt.getHours())}${pad(generatedAt.getMinutes())}`;
-  const raw = `【深信服】首次安全体检报告-${customerName}-${timestamp}.html`;
+  const raw = `【深信服】安全体检报告-${customerName}-${timestamp}.html`;
   return raw.replace(/[\\/:*?"<>|]/g, '_');
 }
 

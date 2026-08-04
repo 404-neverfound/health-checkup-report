@@ -38,6 +38,10 @@ from docx.oxml.ns import qn
 from docx.shared import Mm, Pt, RGBColor, Emu
 from PIL import Image
 
+# 风险卡头部标签与卡片上缘的间距（Word 单元格无内边距，用 space_before 模拟 HTML 的 padding-top）
+# 标签本体保持可编辑文本（run 底纹），仅解决"顶格、无上间距"问题。
+_RISK_CARD_HEAD_TAG_SPACE_BEFORE = 8.0   # pt
+
 # 默认配置（与 html_to_word_config.yaml 同步，配置缺失时回退到此）
 _DEFAULT_CONFIG = {
     "preview_mode": "html",
@@ -1251,12 +1255,22 @@ class HtmlToWordExporter:
                             tbl_ind.set(qn('w:w'), str(int(Mm(10).twips)))
                             tbl_ind.set(qn('w:type'), 'dxa')
                     # 增大单元格行距：给所有单元格内的段落加 1.5 倍行距
+                    # 文档信息表（sr-copyright-meta）除外：1.5 倍行距会把行高撑到
+                    # 24pt 而文本只有 13.8pt，Word 的 vAlign=center 只能居中"段落框"，
+                    # 行距的 leading 又压在字形上方，导致内容视觉偏上。此处改为
+                    # 单倍行距 + 最小段距，让行贴近文本后由 vAlign=center 真正居中。
+                    is_doc_info = "sr-copyright-meta" in (child.get("class") or [])
                     for row in last_tbl.rows:
                         for cell in row.cells:
                             for cell_p in cell.paragraphs:
-                                cell_p.paragraph_format.line_spacing = 1.5
-                                cell_p.paragraph_format.space_before = Pt(2)
-                                cell_p.paragraph_format.space_after = Pt(2)
+                                if is_doc_info:
+                                    cell_p.paragraph_format.line_spacing = 1.0
+                                    cell_p.paragraph_format.space_before = Pt(0)
+                                    cell_p.paragraph_format.space_after = Pt(0)
+                                else:
+                                    cell_p.paragraph_format.line_spacing = 1.5
+                                    cell_p.paragraph_format.space_before = Pt(2)
+                                    cell_p.paragraph_format.space_after = Pt(2)
                 first_block = False
 
     # ── 首页（封面）──────────────────────────────────
@@ -2252,7 +2266,13 @@ class HtmlToWordExporter:
         reuse_first_para=True 时复用 cell 默认的第一个空段落，避免出现额外
         空段（用户 mark"这个换行不要"）。
 
-        标题字号 13pt（>11pt，满足用户 mark"这行字体字号要大于11"）。"""
+        标题字号 13pt（>11pt，满足用户 mark"这行字体字号要大于11"）。
+
+        mark 调整（2026-08）：
+          - 标签（威胁运营/威胁预防/防护有效性）保持可编辑文本（run 底纹），
+            不做圆角图片。
+          - 标签不再顶格：头段落设 space_before 上间距（Word 单元格默认
+            无内边距，用段前间距模拟 HTML 的 padding-top）。"""
         if reuse_first_para and container.is_cell and container.cell.paragraphs:
             p = container.cell.paragraphs[0]
             # 清掉默认空 run
@@ -2260,6 +2280,8 @@ class HtmlToWordExporter:
                 r._element.getparent().remove(r._element)
         else:
             p = container.add_paragraph()
+        # 头段落：上间距（非顶格）
+        p.paragraph_format.space_before = Pt(_RISK_CARD_HEAD_TAG_SPACE_BEFORE)
         for child in node.children:
             if isinstance(child, NavigableString):
                 text = str(child).strip()
@@ -2296,7 +2318,7 @@ class HtmlToWordExporter:
                     text = child.get_text(" ", strip=True)
                     if text:
                         run = p.add_run(f" {text} ")
-                        run.font.size = Pt(9)
+                        run.font.size = Pt(10.5)  # 五号（用户 mark）
                         run.font.bold = True
                         run.font.color.rgb = RGBColor.from_string(fg_hex)
                         self._set_run_shading(run, bg_hex)
@@ -2310,6 +2332,7 @@ class HtmlToWordExporter:
                     if text and tag_key:
                         bg, fg = _TAG_COLORS.get(tag_key, ("6F7785", "FFFFFF"))
                         run = p.add_run(f" {text} ")
+                        run.font.size = Pt(10.5)  # 五号（与浅底标签一致）
                         run.bold = True
                         run.font.color.rgb = RGBColor.from_string(fg)
                         self._set_run_shading(run, bg)
@@ -2918,6 +2941,14 @@ class HtmlToWordExporter:
                 tblPr.append(tblInd)
             except Exception:
                 pass
+
+        # 文档信息表（sr-copyright-meta）：所有单元格内容水平居中
+        # （垂直居中已统一处理，此处补水平居中）
+        if is_doc_info_table:
+            for row in table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.paragraphs:
+                        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
         # 仅 4.5 节"体检总体评级"表：数据行的第 1、2 列（徽章、风险程度）段落居中
         # 表头行与第 3 列"定义"保持原对齐（与 HTML inline style="text-align:left" 一致）

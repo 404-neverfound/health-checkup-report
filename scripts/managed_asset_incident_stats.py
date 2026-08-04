@@ -83,7 +83,7 @@ def rank_business_systems(records, n):
     for record in records:
         system_name = record.get("system")
         if not system_name:
-            system_name = "未知"
+            system_name = "未命名业务系统"
         # 拆分复合业务字段，每个独立业务各计一次
         for biz in split_biz(system_name):
             bucket = system_counts.setdefault(biz, {
@@ -247,9 +247,9 @@ def main():
                 if ips:
                     incident_ip = ips[0]
 
-            # 业务系统安全事件分布：资产表所属业务为空时归入"未知"，正常计入分布
+            # 业务系统安全事件分布：资产表所属业务为空时归入"未命名业务系统"，正常计入分布
             if incident_ip:
-                biz = ip_to_business.get(incident_ip) or "未知"
+                biz = ip_to_business.get(incident_ip) or "未命名业务系统"
                 severity_raw = normalize(row[level_col] if level_col is not None and level_col < len(row) else None)
                 business_risk_records.append({
                     "system": biz,

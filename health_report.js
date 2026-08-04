@@ -865,6 +865,19 @@ async function writeJsonFile(filePath, data) {
   await fs.writeFile(resolvedPath, JSON.stringify(data, null, 2), 'utf8');
 }
 
+// 各风险清单表归档前的统一后处理：
+// - asset：删除第 1 空行，让表头上移到第 1 行
+// - 各表（exposure 除外）：把表头样式统一为暴露面清单样式（微软雅黑10加粗 + 浅蓝底 + 居中 + thin边框）
+// 处理结果写入临时文件，再 move 到归档目录；失败不阻断归档，源文件原样归档。
+const UNIFY_RISK_HEADER_TABLE_TYPES = {
+  incidentPath: 'incident',
+  assetPath: 'asset',
+  exposurePath: 'exposure',
+  weakpwdPath: 'weakpwd',
+  vulnPath: 'vuln',
+  policyCheckPath: 'policy'
+};
+
 async function archiveRiskListFiles(options) {
   const riskListDir = path.join(options.root, '安全体检报告', '风险清单');
   await fs.mkdir(riskListDir, { recursive: true });
@@ -885,12 +898,53 @@ async function archiveRiskListFiles(options) {
       throw new Error(`归档风险清单失败: 缺少 ${key}`);
     }
 
+    const tableType = UNIFY_RISK_HEADER_TABLE_TYPES[key];
+    const readyPath = await prepareRiskListTable(tableType, sourcePath, riskListDir, options.logger);
     const targetPath = path.join(riskListDir, filename);
-    archived[key] = await moveOrReplaceFile(sourcePath, targetPath);
+    archived[key] = await moveOrReplaceFile(readyPath, targetPath);
     logWith(options.logger, `风险清单已归档: ${archived[key]}`);
   }
 
   return archived;
+}
+
+// 归档前对单张表执行统一后处理（删除资产表首空行 + 统一表头样式）。
+// 处理成功返回处理后的文件路径；失败返回源文件路径（不阻断归档）。
+async function prepareRiskListTable(tableType, sourcePath, workDir, logger) {
+  if (!tableType || tableType === 'exposure') {
+    return sourcePath;
+  }
+
+  const scriptPath = path.join(__dirname, 'scripts', 'unify_risk_list_headers.py');
+  const unifyOutPath = path.join(workDir, `.unify-${path.basename(sourcePath)}`);
+  try {
+    await execPythonWithArgs(scriptPath, [tableType, sourcePath, unifyOutPath]);
+    logWith(logger, `风险清单表头已统一: ${tableType} -> ${unifyOutPath}`);
+    return unifyOutPath;
+  } catch (error) {
+    logWith(logger, `风险清单表头统一失败（不影响归档，使用源文件）: ${tableType} ${error.message}`);
+    return sourcePath;
+  }
+}
+
+// 执行 Python 脚本并等待退出，失败抛错
+function execPythonWithArgs(scriptPath, args) {
+  const { execFile } = require('child_process');
+  return new Promise((resolve, reject) => {
+    execFile('python', [scriptPath, ...args], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 120000,
+      maxBuffer: 10 * 1024 * 1024,
+      env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8' })
+    }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr || error.message));
+        return;
+      }
+      resolve(stdout.trim());
+    });
+  });
 }
 
 async function moveOrReplaceFile(sourcePath, targetPath) {
@@ -961,25 +1015,6 @@ async function zipDirectory(sourceDir, logger) {
         return;
       }
       resolve(zipPath);
-    });
-  });
-}
-
-function execPythonScript(scriptPath) {
-  const { execFile } = require('child_process');
-  return new Promise((resolve, reject) => {
-    execFile('python', [scriptPath], {
-      encoding: 'utf8',
-      windowsHide: true,
-      maxBuffer: 1024 * 1024,
-      env: Object.assign({}, process.env, { PYTHONIOENCODING: 'utf-8' })
-    }, (error, stdout, stderr) => {
-      if (error) {
-        reject(new Error(`Python脚本执行失败: ${stderr || error.message}`));
-        return;
-      }
-      if (stdout) console.error(stdout.trim());
-      resolve();
     });
   });
 }

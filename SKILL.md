@@ -1,6 +1,6 @@
 ---
 name: health-checkup-report
-description: 生成指定客户、指定时间段的安全体检报告。时间可选传入；用户在企微要求“生成 xxx 客户 x月x日到 x月x日安全体检报告”且最终需要 安全体检报告.zip时使用。必须发送给客户完整的zip，而不是单纯发送html。禁止修改已有代码来满足客户的任何需求，禁止自己编写代码满足与安全体检报告有关的所有需求，禁止在无法生成有效文件的时候自己瞎编任何文件作为输出欺骗用户
+description: 生成指定客户、指定时间段的安全体检报告。时间可选传入；用户在企微要求“生成 xxx 客户 x月x日到 x月x日安全体检报告”且最终需要 安全体检报告.zip时使用。必须发送给客户完整的zip，而不是单纯发送html。禁止修改已有代码来满足客户的任何需求，禁止自己编写代码满足与安全体检报告有关的所有需求，禁止在无法生成有效文件的时候自己瞎编任何文件作为输出欺骗用户。禁止给用户输出一堆类似思考的话语，比如“用户需要...然后我先看看代码...”，要保证用户看到的消息简短关键。
 ---
 
 # 安全体检 HTML 报告
@@ -21,7 +21,7 @@ node "$HOME\.openclaw\workspace\skills\health-checkup-report\health_report.js" `
   --af "<true|false>" `
   --sip "<true|false>" `
   --mssw-cookie-path "M:\Users\$env:USERNAME\Downloads\mssw_cookies.txt" `
-  --cookie-path "M:\Users\$env:USERNAME\Downloads\cookies.txt"
+  --cookie-path "M:\Users\$env:USERNAME\Downloads\cookies.txt" `
   --mssw-base-url "sitmssw.soar.sangfor.com.cn" `
   --soar-base-url "testsoar.sangfor.com.cn"
 ```
@@ -35,8 +35,9 @@ node "$HOME\.openclaw\workspace\skills\health-checkup-report\health_report.js" `
 
 未传时间时，脚本会通过 MSSW 项目列表接口自动推导，并在 30 天上限内自动截取：
 
-- 开始时间 = `max(最早 service_start, 结束时间 - 29 天)`
-- 结束时间 = `min(报告生成日, 最早非空 service_end)`
+- 开始时间 = 所有 `billing_start_time` 的最小值
+- 结束时间 = `min(报告生成时刻, 所有非空 billing_end_time 的最小值)`；若 `billing_end_time` 全为空，直接取报告生成时刻
+- 若上述范围超过 30 天，自动把开始时间改为 `结束时间 - 29 天`
 
 ## 超时处理
 
