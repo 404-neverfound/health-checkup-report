@@ -104,6 +104,7 @@ function renderTemplate(template, reportData, gradeAssets) {
   html = patchKnownText(html, reportData);
   html = patchKeyRisk01Advice(html, reportData);
   html = patchDataFields(html, reportData);
+  html = patchIntranetVulnChallengeNote(html, reportData);
   html = patchPolicyCheckKpiCards(html, reportData);
   html = patchWeakPwdSections(html, reportData);
   html = patchGrade(html, reportData, gradeAssets);
@@ -1114,7 +1115,7 @@ function renderIntranetVulnDescription(data) {
   const hasAny = critical + high + medium + low > 0;
 
   if (!hasAny) {
-    return '当前内网业务整体风险优秀，没有发现漏洞。';
+    return '当前内网业务整体安全状况优良，本次检测未识别到漏洞。';
   }
 
   let level;
@@ -1201,6 +1202,19 @@ function renderIntranetVulnAssetTopBlock(data) {
     '<thead><tr><th>序号</th><th>风险资产</th><th>漏洞修复优先级</th></tr></thead>' +
     `<tbody>${assetTableRows}</tbody></table>`
   );
+}
+
+// 内网漏洞详情引导语：当内网漏洞数量为 0 时，《漏洞清单.xlsx》无实际数据，
+// 省略“详情见《漏洞清单.xlsx》”的说法，仅保留 XDR 平台查询入口
+function patchIntranetVulnChallengeNote(html, data) {
+  const v = (data.intranet && data.intranet.vuln) || {};
+  const total = Number(v.total || 0);
+  if (total !== 0) {
+    return html;
+  }
+  const original = '内网漏洞详情见《漏洞清单.xlsx》，也可访问 XDR 平台-->脆弱性-->风险视角-->漏洞';
+  const zeroText = '内网漏洞详情可访问 XDR 平台-->脆弱性-->风险视角-->漏洞';
+  return html.replace(original, zeroText);
 }
 
 module.exports = {
