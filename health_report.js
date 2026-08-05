@@ -335,8 +335,8 @@ async function main() {
     }
 
     logger('开始准备威胁预防所需表格...');
-    preventionTables = options['skip-prevention']
-      ? (logger('威胁预防表格使用本地文件（skip-prevention 模式）'),
+    preventionTables = options.mock === true || options.mock === 'true'
+      ? (logger('威胁预防表格使用本地文件（mock 模式）'),
         {
           weakpwd: { filePath: path.join(__dirname, '弱口令清单.xlsx'), source: 'local' },
           vuln:    { filePath: path.join(__dirname, '漏洞清单.xlsx'),    source: 'local' },
@@ -689,7 +689,7 @@ Options:
   --end <YYYY-MM-DD>             Optional report end date (最大范围 30 天)
   --cookie-path <path>           SOAR cookie file path (soar.sangfor.com.cn)
   --xdr-tables <names>           Optional MSSW export tables, default asset,incident
-  --mock                         使用本地文件模拟数据，跳过MSSW接口下载
+  --mock                         使用根目录本地清单模拟数据，跳过接口下载
   --download-dir <path>          Optional export directory override
   --output-json <path>           Optional report data JSON path, default output/report-data.json
   --json                         Print full JSON result to stdout
@@ -699,7 +699,6 @@ Options:
   --output-dir <path>            Output directory
   --af <true|false>              是否开通防火墙云情报网关订阅（必填，由 skill 层反问后传入）
   --sip <true|false>             是否开通SIP云端情报检测（必填，由 skill 层反问后传入）
-  --skip-prevention              使用项目根目录下的本地清单（弱口令清单.xlsx / 漏洞清单.xlsx / 暴露面清单.xlsx），跳过接口导出
 `);
 }
 
@@ -911,8 +910,15 @@ async function archiveRiskListFiles(options) {
 // 归档前对单张表执行统一后处理（删除资产表首空行 + 统一表头样式）。
 // 处理成功返回处理后的文件路径；失败返回源文件路径（不阻断归档）。
 async function prepareRiskListTable(tableType, sourcePath, workDir, logger) {
-  if (!tableType || tableType === 'exposure') {
+  if (!tableType) {
     return sourcePath;
+  }
+
+  // 暴露面表不需要统一表头，但仍须先复制到归档工作目录，避免归档 move 删除输入文件。
+  if (tableType === 'exposure') {
+    const archiveCopyPath = path.join(workDir, `.archive-${path.basename(sourcePath)}`);
+    await fs.copyFile(sourcePath, archiveCopyPath);
+    return archiveCopyPath;
   }
 
   const scriptPath = path.join(__dirname, 'scripts', 'unify_risk_list_headers.py');
