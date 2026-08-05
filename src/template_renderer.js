@@ -1132,11 +1132,15 @@ function renderIntranetVulnDescription(data) {
 function renderIntranetVulnLevelDetail(data) {
   const v = (data.intranet && data.intranet.vuln) || {};
   if (!v.total) return '';
+  // 某等级数量为0时，不展示该等级的“其中可利用X个”
+  const levelPart = (count, exploitable) =>
+    `<strong>${num(count)}</strong> 个` +
+    (Number(count) > 0 ? `，其中可利用 <strong>${num(exploitable)}</strong> 个` : '');
   return (
-    `（严重 <strong>${num(v.critical)}</strong> 个，其中可利用 <strong>${num(v.critical_exploitable)}</strong> 个；` +
-    `高危 <strong>${num(v.high)}</strong> 个，其中可利用 <strong>${num(v.high_exploitable)}</strong> 个；` +
-    `中危 <strong>${num(v.medium)}</strong> 个，其中可利用 <strong>${num(v.medium_exploitable)}</strong> 个；` +
-    `低危 <strong>${num(v.low)}</strong> 个，其中可利用 <strong>${num(v.low_exploitable)}</strong> 个）`
+    `（严重 ${levelPart(v.critical, v.critical_exploitable)}；` +
+    `高危 ${levelPart(v.high, v.high_exploitable)}；` +
+    `中危 ${levelPart(v.medium, v.medium_exploitable)}；` +
+    `低危 ${levelPart(v.low, v.low_exploitable)}）`
   );
 }
 

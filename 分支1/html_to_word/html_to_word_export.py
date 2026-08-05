@@ -2345,6 +2345,7 @@ class HtmlToWordExporter:
     def _handle_top5_asset_ip_row(self, node, container):
         """Top5 资产 IP 行：把 IP 和"未托管/已托管"标签拼到同一段落，
         标签渲染为灰色小字 + 括号包含（对应 HTML .sr-top5-asset-ip-row）。
+        IP 不加粗（对应 HTML .sr-top5-asset-ip 的 font-weight:400）。
         例：<div class="sr-top5-asset-ip-row"><span class="sr-top5-asset-ip">10.1.2.3</span><span class="sr-tag sr-tag--light sr-tag--medium">未托管</span></div>
         → Word: "10.1.2.3 (未托管)" 其中 "(未托管)" 是灰色 8.5pt 小字。"""
         p = container.add_paragraph()
@@ -2359,7 +2360,7 @@ class HtmlToWordExporter:
                     ip_text = child.get_text(" ", strip=True)
                     if ip_text:
                         ip_run = p.add_run(ip_text)
-                        ip_run.bold = True
+                        ip_run.bold = False
                 elif any(c.startswith("sr-tag") for c in classes):
                     tag_text = child.get_text(" ", strip=True)
                     if tag_text:
@@ -2927,6 +2928,16 @@ class HtmlToWordExporter:
                 ci += colspan
         self._set_table_column_widths_by_grid(table, grid, node)
         self._set_table_borders(table)
+        # 附录（#sec-appendix）内的表格：表头行（全 th）水平居中显示。
+        # HTML 中 .sr-tbl th 默认 text-align:left，Word 单元格段落未设对齐时
+        # 同样继承 left；这里把附录内表格的表头单元格段落统一居中。
+        if node.find_parent(id="sec-appendix") is not None:
+            for row_index, row_data in enumerate(grid):
+                if row_data and all(cell_soup is not None and cell_soup.name == "th"
+                                    for cell_soup, _, _ in row_data):
+                    for cell in table.rows[row_index].cells:
+                        for paragraph in cell.paragraphs:
+                            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         # 仅局部：sr-top5-tbl（2.2节 TOP5风险资产表）左对齐 + 2mm缩进，与HTML对齐一致
         if "sr-top5-tbl" in node_classes:
             try:
@@ -2946,6 +2957,57 @@ class HtmlToWordExporter:
                 tblInd.set(qn('w:w'), str(int(Mm(2).twips)))
                 tblInd.set(qn('w:type'), 'dxa')
                 tblPr.append(tblInd)
+            except Exception:
+                pass
+
+        # 组件策略检查异常项表（sr-component-check-tbl）：第 1 列（序号）与
+        # 最后一列（风险说明）在自动分配的列宽基础上各加宽一个汉字宽度
+        # （10.5pt 中文 ≈ 3.7mm），让这两列能多容纳一个汉字；中间列等比收缩，
+        # 总宽保持页面内容宽度，避免 Word 按内容撑开溢出。
+        if "sr-component-check-tbl" in node_classes:
+            try:
+                cfg_w = self.config.get("docx", {})
+                content_w_mm = cfg_w.get("page_width_mm", 210) - 2 * cfg_w.get("margin_mm", 20)
+                tbl = table._tbl
+                tblGrid = tbl.find(qn("w:tblGrid"))
+                if tblGrid is None:
+                    raise RuntimeError("no tblGrid")
+                grid_cols = tblGrid.findall(qn("w:gridCol"))
+                ncols = len(grid_cols)
+                if ncols < 3:
+                    raise RuntimeError("too few cols")
+                # 自动分配后的各列宽度（twips -> mm）
+                cur = [int(c.get(qn("w:w"), 0)) * 25.4 / 1440.0 for c in grid_cols]
+                char_mm = 3.7  # 10.5pt 一个汉字 ≈ 3.7mm
+                # 头尾列各加一个汉字宽
+                cur[0] += char_mm
+                cur[-1] += char_mm
+                total = sum(cur)
+                if total > content_w_mm and total > 0:
+                    # 先收缩中间列，尽量保住头尾的加宽
+                    overflow = total - content_w_mm
+                    middle_old = sum(cur[1:-1])
+                    if middle_old > overflow:
+                        scale = (middle_old - overflow) / middle_old
+                        for i in range(1, ncols - 1):
+                            cur[i] *= scale
+                        total = sum(cur)
+                    # 若仍超，整体等比收口兜底
+                    if total > content_w_mm and total > 0:
+                        scale = content_w_mm / total
+                        cur = [w * scale for w in cur]
+                table.autofit = False
+                table.allow_autofit = False
+                tblPr = tbl.find(qn('w:tblPr'))
+                if tblPr is None:
+                    tblPr = OxmlElement('w:tblPr')
+                    tbl.insert(0, tblPr)
+                layout = tblPr.find(qn('w:tblLayout'))
+                if layout is None:
+                    layout = OxmlElement('w:tblLayout')
+                    tblPr.append(layout)
+                layout.set(qn('w:type'), 'fixed')
+                self._apply_gridcol_widths(table, cur)
             except Exception:
                 pass
 
@@ -3297,7 +3359,7 @@ class HtmlToWordExporter:
                     current_text = []
                     continue
                 if "sr-top5-asset-ip-row" in classes:
-                    # Top5 资产行：IP 加粗 + 托管状态灰色小字括号
+                    # Top5 资产行：IP 不加粗 + 托管状态灰色小字括号
                     parts.append(("text", "".join(current_text), None))
                     parts.append(("top5_asset_ip_row", child, None))
                     current_text = []
@@ -3480,8 +3542,9 @@ class HtmlToWordExporter:
                 type_run.font.color.rgb = RGBColor(0x8A, 0x8F, 0x9A)
 
     def _render_top5_asset_ip_row(self, paragraph, div_node):
-        """渲染 Top5 资产行：IP（默认字号、加粗、黑色）+ 托管状态（括号形式、灰色小字）
+        """渲染 Top5 资产行：IP（默认字号、不加粗、黑色）+ 托管状态（括号形式、灰色小字）
         作为两个独立 run 渲染到同一段落，与 _render_component_name_row 风格保持一致。
+        IP 不加粗（对应 HTML .sr-top5-asset-ip 的 font-weight:400）。
 
         HTML 结构：
         <div class="sr-top5-asset-ip-row">
@@ -3496,7 +3559,7 @@ class HtmlToWordExporter:
             if ip_text:
                 ip_run = paragraph.add_run(ip_text)
                 ip_run.font.size = Pt(10.5)
-                ip_run.font.bold = True
+                ip_run.font.bold = False
                 ip_run.font.color.rgb = RGBColor(0x1F, 0x23, 0x2E)
 
         # 托管状态标签（sr-tag--light 系列）
