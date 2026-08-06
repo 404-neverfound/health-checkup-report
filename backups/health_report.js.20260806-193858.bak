@@ -2,7 +2,6 @@
 'use strict';
 
 const path = require('path');
-const os = require('os');
 const fs = require('fs/promises');
 
 // 阶段耗时打印辅助：包裹一个 async 函数，打印开始/结束及耗时（ms）
@@ -623,7 +622,6 @@ async function main() {
   if (zipPath) {
     logger(`ZIP 已生成: ${zipPath}`);
   }
-  const outboundZipPath = await publishZipToOutbound(zipPath, options['delivery-id'], logger);
 
   console.log(`[总耗时] 报告导出完成: ${Date.now() - __main_t0} ms`);
 
@@ -632,7 +630,6 @@ async function main() {
     xdrExports: tableExports,
     word_path: wordExport ? wordExport.wordPath : null,
     zip_path: zipPath || null,
-    outbound_zip_path: outboundZipPath,
     branch1Artifacts: branch1Result
       ? {
         ...branch1Result.artifacts,
@@ -700,7 +697,6 @@ Options:
   --poll-interval-ms <ms>        Optional MSSW event export polling interval
   --template <path>              HTML template path
   --output-dir <path>            Output directory
-  --delivery-id <id>             Optional per-request WeCom outbound delivery ID
   --af <true|false>              是否开通防火墙云情报网关订阅（必填，由 skill 层反问后传入）
   --sip <true|false>             是否开通SIP云端情报检测（必填，由 skill 层反问后传入）
 `);
@@ -1027,23 +1023,6 @@ async function zipDirectory(sourceDir, logger) {
       resolve(zipPath);
     });
   });
-}
-
-async function publishZipToOutbound(zipPath, deliveryId, logger) {
-  if (!zipPath || !deliveryId) return null;
-  const safeDeliveryId = String(deliveryId).trim();
-  if (!/^[a-zA-Z0-9_-]+$/.test(safeDeliveryId)) {
-    throw new Error('Invalid --delivery-id: only letters, numbers, underscores, and hyphens are allowed.');
-  }
-
-  const targetDir = path.join(os.homedir(), '.openclaw', 'media', 'outbound', safeDeliveryId);
-  const targetPath = path.join(targetDir, path.basename(zipPath));
-  const temporaryPath = `${targetPath}.uploading`;
-  await fs.mkdir(targetDir, { recursive: true });
-  await fs.copyFile(zipPath, temporaryPath);
-  await fs.rename(temporaryPath, targetPath);
-  logWith(logger, `ZIP 已投递到企微 outbound: ${targetPath}`);
-  return targetPath;
 }
 
 function formatLocalDate(date) {
